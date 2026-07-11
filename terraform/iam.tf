@@ -407,25 +407,28 @@ data "aws_iam_policy_document" "deployer_permissions" {
     }
   }
 
-  # IAM: the remaining lifecycle/read/PassRole actions on project roles only
-  # (never account-wide). Deliberately excludes PutRolePolicy/
-  # DeleteRolePolicy/GetRolePolicy/ListRolePolicies — this design uses
-  # customer-managed policies (aws_iam_policy + aws_iam_role_policy_attachment),
-  # never inline role policies (aws_iam_role_policy). Also excludes
-  # AttachRolePolicy/DetachRolePolicy, which get their own statement below
-  # with an additional condition, and excludes
+  # IAM: lifecycle + READ actions on project roles only (never account-wide).
+  # Includes the read actions Terraform needs to REFRESH a role on every plan/
+  # apply — GetRole, ListRolePolicies, GetRolePolicy, ListAttachedRolePolicies,
+  # ListRoleTags. These are read-only and cannot escalate (they only inspect a
+  # role). Deliberately STILL excludes the inline-policy WRITES
+  # (PutRolePolicy/DeleteRolePolicy) — inline writes were the escalation vector,
+  # and this design uses only customer-managed policies. Also excludes
+  # AttachRolePolicy/DetachRolePolicy (own conditioned statement below) and
   # PutRolePermissionsBoundary/DeleteRolePermissionsBoundary entirely — the
-  # deployer must never be able to strip or swap a role's boundary once
-  # iam:CreateRole has set it.
+  # deployer must never strip or swap a role's boundary once iam:CreateRole set it.
   statement {
     sid    = "IamProjectRoleManagement"
     effect = "Allow"
     actions = [
       "iam:DeleteRole",
       "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListRoleTags",
+      "iam:ListAttachedRolePolicies",
       "iam:UpdateRole",
       "iam:UpdateAssumeRolePolicy",
-      "iam:ListAttachedRolePolicies",
       "iam:TagRole",
       "iam:UntagRole",
       "iam:PassRole",
