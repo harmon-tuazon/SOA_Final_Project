@@ -4,10 +4,11 @@
 
 ## 1. Status & metadata
 
-- **Status:** Approved
+- **Status:** Done
 - **Date:** 2026-07-11
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-11 (user)
+- **Completed:** 2026-07-11
 
 > Decisions below were settled via `/grill-me`. Execution starts only after this PRD is marked **Approved**.
 
@@ -124,4 +125,16 @@ Both surfaced by `infra-reviewer`; the pipeline is safe to run today. Neither is
 
 ## Outcome
 
-_Filled after execution._
+Executed 2026-07-11, all success criteria met — the keyless CI/CD loop is proven live.
+
+- **IAM:** `soa-ci-plan` role (read-only, trust scoped to `pull_request`) applied, with AWS-managed `ReadOnlyAccess` plus a customer-managed `soa-ci-plan-data-read-deny` (blocks DynamoDB item / S3 object reads, state bucket exempted). `ci_plan_role_arn` output added.
+- **Workflows:** `ci.yml` (PR → `fmt`/`validate`/`plan -lock=false` as `soa-ci-plan`) and `cd.yml` (push to `main`, `terraform/**` → `apply -auto-approve` as `soa-deployer`). Four non-sensitive GitHub Actions **variables** set.
+- **Proven end-to-end:** PR #2's CI ran green (OIDC as `soa-ci-plan`); the merge's CD ran green (OIDC as `soa-deployer`, `terraform apply` succeeded, 0 changes). No stored AWS keys.
+- **Branch protection** on `main`: require PR (0 approvals) + require the `Terraform fmt / validate / plan` check (strict), `enforce_admins = true`.
+
+**Deviations / findings handled during execution:**
+- Review finding #2 (ci-plan data reads) **fixed here** — the deny policy above.
+- Review finding #1 (identities not pipeline-recreatable after destroy) **resolved by decision** — identities stay in the permanent `terraform/` config (never destroyed); billable infra moves to a separate `terraform/app/` config in the next PRD. `docs/operations/terraform-foundation.md` §7 corrected to match.
+- **Gap discovered in PRD 0001's deployer policy:** `soa-deployer` lacked the read-only `iam:ListRolePolicies`/`GetRolePolicy`/`ListRoleTags` that `terraform` needs to *refresh* IAM roles, so the first CD `apply` failed on `ListRolePolicies`. Added them (inline *write* actions stay excluded, so the anti-escalation design is intact). Because the pipeline **cannot modify its own IAM**, this was applied by a human `terraform apply` first, then merged — a live demonstration of the PRD 0001 self-management design.
+
+Operational documentation: [docs/operations/cicd-pipeline.md](../../operations/cicd-pipeline.md). Decision context: [ADR 0001](../../architecture/decisions/0001-platform-and-compute-architecture.md).

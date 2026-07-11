@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-This repository is being built from scratch. As of now there is no application code — the authoritative source is [PROJECT REQUIREMENTS.md](PROJECT%20REQUIREMENTS.md), and the platform/compute decision is recorded in [ADR 0001](docs/architecture/decisions/0001-platform-and-compute-architecture.md). The distilled, working specs live under [docs/](docs/) as they are written. Everything below is the **target** state being built toward, not yet-existing code; verify a path/command exists before relying on it.
+This repository is being built from scratch. As of now there is no application code — the authoritative source is [PROJECT REQUIREMENTS.md](PROJECT%20REQUIREMENTS.md), and the platform/compute decision is recorded in [ADR 0001](docs/architecture/decisions/0001-platform-and-compute-architecture.md) and the Terraform configuration topology in [ADR 0002](docs/architecture/decisions/0002-terraform-configuration-topology.md). The distilled, working specs live under [docs/](docs/) as they are written. Everything below is the **target** state being built toward, not yet-existing code; verify a path/command exists before relying on it.
 
 ## What this is
 
@@ -33,13 +33,14 @@ SOA_Final_Project/
 │   └── <worker>/
 ├── ecs/                # ECS task/service definitions
 ├── docker-compose.yml  # local multi-service dev / testing
-├── terraform/
-│   ├── main.tf         # wires modules together
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── backend.tf      # S3 remote state backend (native locking)
-│   └── modules/        # network, iam, registry(ECR), data(DynamoDB),
-│                       # ecs, lambda, messaging(SQS/SNS), observability(CloudWatch)
+├── terraform/          # THREE separate configs/states — see ADR 0002
+│   ├── bootstrap/      #   state-bucket config — applied once by hand, never destroyed
+│   ├── *.tf            #   ROOT = identity foundation (permanent, human-applied):
+│   │                   #   GitHub OIDC provider, soa-deployer + soa-ci-plan roles, soa-boundary
+│   └── app/            #   billable app infra (own state) — pipeline-applied, destroyable:
+│       ├── main.tf     #     wires modules; own backend.tf (separate state key)
+│       └── modules/    #     network, ecs, lambda, messaging(SQS/SNS), registry(ECR),
+│                       #     data(DynamoDB), observability(CloudWatch)
 ├── docs/               # structured documentation (see Documentation below)
 │   ├── architecture/   # shape, requirements & NFRs; ADRs in architecture/decisions/
 │   ├── action_plan/    # PRDs (see action-plan rule)
@@ -64,17 +65,21 @@ Pick a single AWS region and keep all resources in it to keep inter-service tran
 
 ## Infrastructure: Terraform
 
-Everything is provisioned through Terraform — nothing is clicked together in the console, which keeps the environment reproducible and destroyable. Code is split into small single-purpose modules under `terraform/modules/`; a thin root config wires them and selects the backend.
+Everything is provisioned through Terraform — nothing is clicked together in the console. Terraform is split into **three separate configs, each with its own state, by lifecycle** (see [ADR 0002](docs/architecture/decisions/0002-terraform-configuration-topology.md)):
 
-- **Remote state** lives in a dedicated **versioned S3 bucket** with **native state locking** (`use_lockfile = true`, Terraform ≥ 1.10; `backend.tf`), not on a laptop. Locking prevents concurrent pipeline runs from corrupting state; versioning lets you roll back a bad apply.
-- Common commands (run from `terraform/`): `terraform init`, `terraform fmt`, `terraform validate`, `terraform plan`, `terraform apply`. **`terraform destroy` is the intended teardown** between sessions and after grading — it is expected, not exceptional.
+- **`terraform/bootstrap/`** — the remote-state S3 bucket. Applied once by hand; **never destroyed**.
+- **`terraform/` (root) — the identity foundation** (GitHub OIDC provider, `soa-deployer` + `soa-ci-plan` roles, `soa-boundary`). **Free and permanent**, and **human-applied** — the deployer can't modify its own IAM, so identity changes need a local `terraform apply` with admin creds. **Not** part of routine teardown.
+- **`terraform/app/` — the billable app infra** (VPC, ECS, ALB, ECR, DynamoDB, SQS/SNS, Lambda, CloudWatch, and per-service workload roles). Applied by the **pipeline** (`cd.yml`) and split into small single-purpose modules under `terraform/app/modules/`. **This is the config `terraform destroy`ed between sessions** to return spend to ~$0.
+
+- **Remote state** for each config lives in the shared **versioned S3 bucket** (distinct keys) with **native state locking** (`use_lockfile = true`, Terraform ≥ 1.10; `backend.tf`). Locking prevents concurrent runs from corrupting state; versioning lets you roll back a bad apply.
+- Common commands: `terraform init`, `terraform fmt`, `terraform validate`, `terraform plan`, `terraform apply`, run from the relevant config dir. **`terraform destroy` targets `terraform/app/`** — tearing down billable infra between sessions is expected; the identity foundation and state bucket are deliberately left standing.
 
 ## CI/CD: GitHub Actions
 
 Two workflows, gated by branch:
 
-- **`ci.yml` (on pull request)** — must pass before merge: per-service lint + tests (unit + integration), Docker build (services) / package (functions), and `terraform fmt`/`validate`/`plan`.
-- **`cd.yml` (on push to `main`)** — authenticate to AWS (keyless OIDC) → build each service image tagged with `$GITHUB_SHA` → push to ECR → package Lambda functions → `terraform apply` → deploy services to ECS (`aws ecs update-service` / new task definition) and publish new Lambda versions → smoke-test → complete the rollout.
+- **`ci.yml` (on pull request)** — must pass before merge: per-service lint + tests (unit + integration), Docker build (services) / package (functions), and `terraform fmt`/`validate`/`plan` on **`terraform/app/`** (keyless OIDC as the read-only `soa-ci-plan` role).
+- **`cd.yml` (on push to `main`)** — authenticate to AWS (keyless OIDC as `soa-deployer`) → build each service image tagged with `$GITHUB_SHA` → push to ECR → package Lambda functions → `terraform apply` on **`terraform/app/`** → deploy services to ECS (`aws ecs update-service` / new task definition) and publish new Lambda versions → smoke-test → complete the rollout. (The identity foundation in `terraform/` root is human-applied, not touched by the pipeline.)
 
 **Deployment strategy (rolling / built-in rollback):** ECS performs a rolling update (new task set brought up and health-checked behind the ALB before the old one drains); a failed health check stops the rollout on the last good task definition. Because images are SHA-tagged, rollback is a redeploy of the previous known-good task definition.
 
@@ -99,6 +104,6 @@ Substantial work (provisioning resources, standing up a pipeline stage, scaffold
 
 ## Conventions & guardrails
 
-- Keep the environment **cheap and disposable.** No always-on resources without a design reason (no NAT gateway, no idle load balancers beyond the single shared ALB, no oversized tasks); prefer free-tier services and tear down with `terraform destroy` when idle.
+- Keep the environment **cheap and disposable.** No always-on resources without a design reason (no NAT gateway, no idle load balancers beyond the single shared ALB, no oversized tasks); prefer free-tier services and tear down **`terraform/app/`** with `terraform destroy` when idle (the identity foundation and state bucket stay standing — see ADR 0002).
 - Keep **databases private** (not publicly exposed) and keep **pipeline and workload IAM identities separate and least-privilege**.
 - Tag images by commit SHA; never deploy `:latest`.

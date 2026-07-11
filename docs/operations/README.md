@@ -7,3 +7,4 @@ Everything about running the system: local setup, the CI/CD pipeline, AWS accoun
 ## Documents
 
 - [terraform-foundation.md](terraform-foundation.md) — bootstrapping the S3 remote-state backend, init/plan/apply for the root config, the GitHub OIDC keyless-auth model, the `soa-boundary` permissions-boundary pattern, and teardown. Covers [PRD platform/0001](../action_plan/platform/0001-terraform-foundation.md).
+- [cicd-pipeline.md](cicd-pipeline.md) — the `ci.yml`/`cd.yml` GitHub Actions workflows, the `soa-ci-plan` read-only role, the four Actions variables, the developer PR → merge → apply flow, and operational gotchas (deployer self-edit denies, do-not-destroy-the-foundation rule). Covers [PRD platform/0002](../action_plan/platform/0002-cicd-pipeline.md).
