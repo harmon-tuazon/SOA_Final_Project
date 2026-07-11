@@ -560,3 +560,111 @@ resource "aws_iam_role_policy_attachment" "deployer" {
   role       = aws_iam_role.deployer.name
   policy_arn = aws_iam_policy.deployer.arn
 }
+
+# --- CI plan role --------------------------------------------------------
+#
+# Read-only counterpart to the deployer role, assumed by GitHub Actions on
+# pull-request runs to authenticate `terraform fmt`/`validate`/`plan`
+# (PRD platform/0002). Reuses the same OIDC provider above — no second
+# provider is created. Trust is scoped to `pull_request` events on this repo
+# only, so it can never be assumed from a `main`-branch push (that's the
+# deployer's job) or from another repo/fork.
+data "aws_iam_policy_document" "ci_plan_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_actions.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repo}:pull_request"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ci_plan" {
+  name               = "${var.name_prefix}-ci-plan"
+  description        = "Assumed by GitHub Actions (OIDC) on pull-request runs to run terraform fmt/validate/plan read-only. Never assumable from main-branch pushes."
+  assume_role_policy = data.aws_iam_policy_document.ci_plan_trust.json
+}
+
+# AWS-managed ReadOnlyAccess is the pragmatic default for a `terraform plan`
+# role: plan needs to read across whatever services the config references,
+# and that set grows as the project grows, so a hand-maintained scoped read
+# policy would need updating every time a module adds a new resource type.
+# This role can never write/create/delete (no CI identity gets a permissions
+# boundary or write policy here) — infra-reviewer may replace this with a
+# scoped read-only policy later if that's preferred over the managed policy.
+resource "aws_iam_role_policy_attachment" "ci_plan" {
+  role       = aws_iam_role.ci_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# No permissions boundary here: the boundary above is the ceiling for
+# WORKLOAD roles the deployer creates (ECS task roles, Lambda execution
+# roles) via its scoped iam:CreateRole grant. soa-ci-plan is a CI identity
+# created by a human `terraform apply`, not by the deployer, and is already
+# constrained to read-only by ReadOnlyAccess — a boundary would be redundant
+# ceiling on top of a role that already can't write anything.
+
+# --- CI plan data-read deny (infra-reviewer finding #2) --------------------
+#
+# ReadOnlyAccess is broad: alongside the config/metadata reads `terraform
+# plan` actually needs (dynamodb:Describe*, s3:ListBucket, etc.), it also
+# grants reads of application DATA CONTENT — DynamoDB item reads and S3
+# object contents — that `plan` never performs. `soa-ci-plan` is assumable
+# from any pull-request run against this repo, so narrowing what a PR run
+# can read is worth doing even though PRs here are same-repo only (see PRD
+# platform/0002 §9 open risk).
+#
+# This explicit Deny is layered on top of the ReadOnlyAccess Allow above —
+# IAM deny always wins regardless of evaluation order — and removes exactly
+# two things `plan` doesn't use:
+#   - DynamoDB item-level reads (Get/BatchGet/Query/Scan/PartiQL). `plan`
+#     only calls dynamodb:DescribeTable (config), never reads items.
+#   - S3 object contents (s3:GetObject) for every bucket EXCEPT the
+#     Terraform state bucket, which is exempted via `not_resources` so
+#     `plan` can still read remote state through the S3 backend.
+data "aws_iam_policy_document" "ci_plan_data_read_deny" {
+  statement {
+    sid    = "DenyDynamoDbItemReads"
+    effect = "Deny"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:BatchGetItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:PartiQLSelect",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid           = "DenyS3ObjectReadsExceptState"
+    effect        = "Deny"
+    actions       = ["s3:GetObject"]
+    not_resources = ["arn:aws:s3:::${var.name_prefix}-tfstate-*/*"]
+  }
+}
+
+resource "aws_iam_policy" "ci_plan_data_read_deny" {
+  name        = "${var.name_prefix}-ci-plan-data-read-deny"
+  description = "Denies soa-ci-plan the application data-content reads (DynamoDB items, S3 object bodies) included in ReadOnlyAccess but never used by terraform plan, exempting the Terraform state bucket so plan still works."
+  policy      = data.aws_iam_policy_document.ci_plan_data_read_deny.json
+}
+
+resource "aws_iam_role_policy_attachment" "ci_plan_data_read_deny" {
+  role       = aws_iam_role.ci_plan.name
+  policy_arn = aws_iam_policy.ci_plan_data_read_deny.arn
+}
