@@ -1,0 +1,13 @@
+# Configures the AWS provider for the root config. Every resource created by
+# this config picks up the default tags below automatically.
+
+provider "aws" {
+  region = var.region
+
+  default_tags {
+    tags = {
+      Project   = "soa"
+      ManagedBy = "terraform"
+    }
+  }
+}

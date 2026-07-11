@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(npm audit *)",
+      "Bash(echo \"LINT_EXIT=$?\")",
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(docker --version)",
+      "Bash(npm test *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(kill 2011)",
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "Bash(echo \"lint exit: $?\")",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)"
+    ]
+  }
+}
