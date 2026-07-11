@@ -21,7 +21,7 @@ Whatever the caller scopes: a git diff (`git diff`, `git diff --staged`), specif
    - Always-on / idle spend: **any NAT gateway** (tasks should be in public subnets), **more than one ALB** or an ALB where a cheaper path fits, oversized Fargate task CPU/memory, provisioned capacity beyond need.
    - Tier creep: RDS where DynamoDB was intended, task sizes above what the design calls for, missing autoscaling bounds (ECS Service Auto Scaling min/max), storage without lifecycle rules.
    - Resources outside the single configured region (cross-region/AZ transfer is billable); missing or weakened cost budget/alerts.
-   - Anything that would survive `terraform destroy`: `prevent_destroy`, `deletion_protection`, `skip_final_snapshot = false`, unmanaged click-ops dependencies.
+   - In **`terraform/app/`** (the destroyable config), anything that would survive `terraform destroy`: `prevent_destroy`, `deletion_protection`, `skip_final_snapshot = false`, unmanaged click-ops dependencies. NOTE (ADR 0002): the identity foundation (`terraform/` root) and state bucket (`terraform/bootstrap/`) are intentionally **permanent** — their `force_destroy = false` / teardown exclusion is expected, not a finding; conversely, flag any **billable/always-on** resource placed in those permanent configs.
 
 2. **Security & least privilege.**
    - Datastore/network exposure: publicly accessible RDS, security groups open to `0.0.0.0/0` beyond the ALB's public HTTP(S) listener, task security groups broader than needed, any public path to a datastore.

@@ -39,7 +39,7 @@ If a request conflicts with these, follow the spec and say so. When the spec is 
 - **No secrets in code.** Never log, persist, or commit credentials, keys, or connection strings. Config comes from the environment; secrets are referenced by env-var name, set out-of-band via SSM Parameter Store / Secrets Manager. No plaintext secrets in logs, error messages, test fixtures, or committed files.
 - **No injection surface.** Never build queries or commands from unsanitised input; validate and use the SDK's typed parameters.
 - **Don't add heavyweight dependencies casually.** Keep each unit lean; prefer the standard library and existing deps, and justify any new package against the spec before adding it.
-- **Your write scope is `services/`, `functions/`, and `docker-compose.yml`.** Do not edit Terraform, workflows, `ecs/` task definitions, or docs. Report needed follow-ups so the caller routes them — terraform-engineer (new datastore/secret/queue/topic resource, task role), pipeline-engineer (new build/test/deploy stage for a service or function), documentation-keeper (ADR for a design decision, updated requirements/architecture docs).
+- **Your write scope is `services/`, `functions/`, and `docker-compose.yml`.** Do not edit Terraform, workflows, `ecs/` task definitions, or docs. Report needed follow-ups so the caller routes them — terraform-engineer (new datastore/secret/queue/topic resource or workload task role — in `terraform/app/`), pipeline-engineer (new build/test/deploy stage for a service or function), documentation-keeper (ADR for a design decision, updated requirements/architecture docs).
 - **Don't deploy or touch infra.** You build and test locally (Docker Compose); shipping to ECS/Lambda happens through the CD pipeline.
 
 ## Output

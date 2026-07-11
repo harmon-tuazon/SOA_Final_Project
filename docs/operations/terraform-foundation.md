@@ -81,9 +81,14 @@ Defined in [`terraform/outputs.tf`](../../terraform/outputs.tf). These are not s
 
 ## 7. Teardown
 
-The root config is a normal part of the `terraform destroy` cycle: `terraform destroy` in `terraform/` removes the OIDC provider, `soa-deployer` role, `soa-boundary` policy, and `soa-deployer-permissions` policy, returning that spend to $0 (it was already ~$0 — no billable resources here).
+The root config (`terraform/`) is the project's **permanent identity foundation** — the OIDC provider, `soa-deployer`, `soa-ci-plan`, `soa-boundary`, and their policies. It is **not** part of routine teardown:
 
-The **state bucket is deliberately excluded** from this cycle (see §2). It only goes away as a final, manual step (e.g. after grading is complete):
+- These resources are **free** (IAM + OIDC cost nothing), so destroying them reclaims no spend.
+- The pipeline **cannot recreate them**: `soa-deployer` can only create roles that carry the permissions boundary, and cannot modify its own IAM (by design — see [PRD platform/0002](../action_plan/platform/0002-cicd-pipeline.md) follow-up #1). A `terraform destroy` here would leave the pipeline unable to re-provision, requiring a human `terraform apply` with admin credentials to restore them.
+
+**Do not `terraform destroy` the `terraform/` config for cost-saving teardown.** Billable infrastructure (network/ECS/ALB, from the next PRD onward) lives in a **separate `terraform/app/` config/state** — *that* is the config you destroy between sessions to return spend to ~$0, and destroying it never touches the identities here.
+
+The **state bucket** (bootstrap) is likewise excluded; it only goes away as a final, manual step, after every other config is destroyed (e.g. after grading):
 
 ```bash
 cd terraform/bootstrap
@@ -91,4 +96,4 @@ cd terraform/bootstrap
 terraform destroy
 ```
 
-Do this last, after every other Terraform config in the project has been destroyed — deleting the state bucket while other state still lives in it orphans that state.
+Deleting the state bucket while other state still lives in it orphans that state — do it last.
