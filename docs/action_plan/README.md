@@ -10,3 +10,4 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | PRD | Status |
 | --- | --- |
 | [0001 — Terraform Foundation](platform/0001-terraform-foundation.md) | Done |
+| [0002 — CI/CD Pipeline (Infrastructure)](platform/0002-cicd-pipeline.md) | In Progress |
