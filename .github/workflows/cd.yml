@@ -4,7 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'terraform/**'
+      # CD only applies terraform/app/ (ADR 0002); the identity foundation in
+      # terraform/ root and terraform/bootstrap/ are human-applied. Trigger on
+      # app changes and on changes to this workflow itself.
+      - 'terraform/app/**'
+      - '.github/workflows/cd.yml'
 
 permissions:
   id-token: write
@@ -16,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: terraform
+        working-directory: terraform/app
 
     steps:
       - name: Checkout

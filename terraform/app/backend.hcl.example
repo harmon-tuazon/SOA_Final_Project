@@ -1,0 +1,4 @@
+# Template for backend.hcl. Copy this file to backend.hcl (gitignored) and
+# fill in the real AWS account id, then run:
+#   terraform init -backend-config=backend.hcl
+bucket = "soa-tfstate-<account_id>"
