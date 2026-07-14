@@ -6,4 +6,10 @@ How the system is shaped and what it does: component responsibilities, service i
 - **Decisions:** significant, one-off decisions are recorded as immutable ADRs in [decisions/](decisions/) — not in the living docs here.
 - **Rule of thumb:** document *why* and *how it fits*; point to Terraform/manifests/source for concrete values that drift (tiers, counts, IDs).
 
-_No documents yet._
+## Documents
+
+- [overview.md](overview.md) — system shape, starting with the network foundation (VPC, public subnets, no-NAT design). Grows as services land.
+
+## Decisions
+
+- [decisions/](decisions/) — immutable ADRs. See [decisions/README.md](decisions/README.md) for the index.
