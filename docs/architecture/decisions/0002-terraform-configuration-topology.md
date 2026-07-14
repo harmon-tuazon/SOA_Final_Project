@@ -35,7 +35,7 @@ The pipeline (`ci.yml` plan / `cd.yml` apply) targets **`terraform/app/`**. The 
 ## Current state / transition
 
 - `bootstrap/` and the root identity foundation **exist and are applied** (PRDs 0001 & 0002).
-- `terraform/app/` **does not exist yet** — it is created in the upcoming **network PRD**, which also **retargets `ci.yml`/`cd.yml` from `terraform/` to `terraform/app/`**. Until then, the pipeline plans/applies the root config as a no-op proof of the keyless chain.
+- `terraform/app/` **now exists and is pipeline-applied** — created in [PRD platform/0003](../../action_plan/platform/0003-network.md) (the network foundation), which also **retargeted `ci.yml`/`cd.yml` from `terraform/` to `terraform/app/`**. The pipeline now plans/applies `terraform/app/`; the identity foundation is human-applied only.
 - Moving the identity `.tf` files into a `terraform/foundation/` subdirectory (so `terraform/` has no loose root config) was considered but deferred — it would require state migration for no functional gain; the root config stays as the identity foundation.
 
 ## Alternatives considered

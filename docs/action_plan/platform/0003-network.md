@@ -4,10 +4,11 @@
 
 ## 1. Status & metadata
 
-- **Status:** Approved
+- **Status:** Done
 - **Date:** 2026-07-14
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-14 (user)
+- **Completed:** 2026-07-14
 
 > Decisions settled via `/grill-me`. Execution starts only after this PRD is marked **Approved**.
 
@@ -111,4 +112,13 @@ aws ec2 describe-subnets --filters "Name=tag:Project,Values=soa" --query 'Subnet
 
 ## Outcome
 
-_Filled after execution._
+Executed 2026-07-14, all success criteria met — and the **first infrastructure the pipeline applied itself**.
+
+- **New `terraform/app/` config** created (state key `app/terraform.tfstate`, partial backend config, `backend.hcl` gitignored) with a `modules/network/` module: VPC `10.0.0.0/16` (DNS on), 2 public subnets across `us-east-1a`/`us-east-1b` (`10.0.0.0/24` + `10.0.1.0/24`, `map_public_ip_on_launch`), internet gateway, and a public route table (`0.0.0.0/0 → IGW`). **8 resources, $0.**
+- **Pipeline retargeted** to `terraform/app/` (`ci.yml`/`cd.yml` working dir; `fmt` stays repo-wide). Review warning fixed: `cd.yml` trigger narrowed from `terraform/**` to `terraform/app/**` (+ the workflow file) so CD only fires on the config it applies (ADR 0002).
+- **Proven via the pipeline:** PR #4 CI planned `terraform/app/` green as `soa-ci-plan`; the merge's CD applied it green as `soa-deployer` in ~39s, creating the VPC. Verified with `aws ec2 describe-vpcs`/`describe-subnets`/`describe-internet-gateways`.
+- **No deployer permission gap** — `infra-reviewer` pre-checked EC2 coverage against the plan; the apply succeeded on the first CD run.
+
+**Note (tracked, non-blocking):** GitHub flagged a **Node 20 deprecation** annotation on the pinned actions (`checkout@v4`, `configure-aws-credentials@v4`, `setup-terraform@v3`) — they're auto-forced to Node 24 and still work; bump to the newer action majors in a future maintenance pass.
+
+Operational documentation: updated by `documentation-keeper`. Topology: [ADR 0002](../../architecture/decisions/0002-terraform-configuration-topology.md).
