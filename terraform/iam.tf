@@ -252,10 +252,15 @@ data "aws_iam_policy_document" "deployer_permissions" {
   # AMIs, availability zones, etc.). Describe* actions do not support
   # resource-level restriction in IAM, so Resource "*" is required here —
   # this is a read-only statement, not account-wide write access.
+  # ec2:GetSecurityGroupsForVpc is a newer read action the ELBv2
+  # CreateLoadBalancer flow requires; it is NOT matched by ec2:Describe*.
   statement {
-    sid       = "Ec2ReadOnly"
-    effect    = "Allow"
-    actions   = ["ec2:Describe*"]
+    sid    = "Ec2ReadOnly"
+    effect = "Allow"
+    actions = [
+      "ec2:Describe*",
+      "ec2:GetSecurityGroupsForVpc",
+    ]
     resources = ["*"]
   }
 
