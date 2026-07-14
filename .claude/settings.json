@@ -23,7 +23,19 @@
       "Bash(echo \"fmt exit: $?\")",
       "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); yaml.safe_load\\(open\\('.github/workflows/cd.yml'\\)\\); print\\('YAML OK'\\)\")",
       "Bash(python -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); yaml.safe_load\\(open\\('.github/workflows/cd.yml'\\)\\); print\\('YAML OK'\\)\")",
-      "PowerShell(aws iam list-roles --path-prefix /aws-service-role/ --query \"Roles[].RoleName\" --output text)"
+      "PowerShell(aws iam list-roles --path-prefix /aws-service-role/ --query \"Roles[].RoleName\" --output text)",
+      "PowerShell(gh pr checks 6 --watch --interval 20)",
+      "PowerShell(gh pr merge 6 --squash --delete-branch; git checkout main 2>&1 | Out-Null; git pull origin main --quiet; Write-Output \"--- watching CD \\(this one takes a few minutes\\) ---\"; Start-Sleep -Seconds 8; $rid = \\(gh run list --workflow=cd.yml -L 1 --json databaseId --jq '.[0].databaseId'\\); Write-Output \"CD run: $rid\"; gh run watch $rid --interval 20 --exit-status)",
+      "PowerShell(gh run rerun 29354845192 --failed)",
+      "PowerShell(gh run watch 29354845192 --interval 20 --exit-status)",
+      "PowerShell(terraform -chdir=terraform/app init -reconfigure -backend-config=backend.hcl -input=false -no-color 2>&1)",
+      "PowerShell(terraform -chdir=terraform/app destroy -auto-approve -no-color 2>&1)",
+      "PowerShell(terraform -chdir=terraform/app init -reconfigure -backend-config=backend.hcl)",
+      "PowerShell(terraform --% -chdir=terraform/app init -reconfigure -backend-config=backend.hcl)",
+      "PowerShell(terraform --% -chdir=terraform/app destroy -auto-approve -no-color)",
+      "PowerShell(git stash)",
+      "PowerShell(git checkout -b closeout-0004)",
+      "PowerShell(git stash pop 2>&1)"
     ]
   }
 }

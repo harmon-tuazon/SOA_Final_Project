@@ -4,10 +4,11 @@
 
 ## 1. Status & metadata
 
-- **Status:** Approved
+- **Status:** Done
 - **Date:** 2026-07-14
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-14 (user)
+- **Completed:** 2026-07-14
 
 > Decisions settled via `/grill-me`. Execution starts only after this PRD is marked **Approved**.
 
@@ -118,4 +119,23 @@ terraform -chdir=terraform/app destroy
 
 ## Outcome
 
-_Filled after execution._
+Executed 2026-07-14 — the golden path proven end-to-end, then torn down to ~$0.
+
+- **Built** `terraform/app/modules/`: `ecs-cluster` (cluster + ALB + HTTP listener + shared execution role), `data` (DynamoDB), `ecs-service` (task def + service + target group + listener rule + boundary-scoped task role + CPU autoscaling). All task/exec roles carry the `soa-boundary` with **customer-managed `soa-*` policies only** (no inline / no AWS-managed — the deployer can't attach those).
+- **Reference service** `services/items` (Express `/health` + `/items` on DynamoDB) + template Dockerfile + Jest tests + root `docker-compose.yml`. Root `.gitignore` added.
+- **Pipeline** deployed it: CD created ECR → built + pushed the SHA-tagged image → `terraform apply` (20+ resources) → `aws ecs wait services-stable` (healthy). CD now also triggers on `services/**`.
+- **Verified live:** `POST /items` then `GET /items` round-tripped through **ALB → Fargate task → DynamoDB** and back. The task reached steady state (its target-group `/health` check passed).
+- **Torn down:** `terraform destroy terraform/app` → `Resources: 0` remaining; ALB + Fargate task gone; cost back to ~$0.
+
+**Two deployer-permission gaps** surfaced on the real apply and were fixed by a **human `terraform apply` on the root identity config** (the pipeline can't modify its own IAM — the PRD 0001/0002 design working as intended), added to `terraform/iam.tf`:
+- `iam:CreateServiceLinkedRole` (condition-scoped to ecs/elb/application-autoscaling) — first-ever ECS/ELB/autoscaling use in the account.
+- `ec2:GetSecurityGroupsForVpc` — a newer ELBv2-CreateLoadBalancer read action **not** matched by `ec2:Describe*`.
+
+**Notes / follow-ups (tracked, non-blocking):**
+- **`/health` is not externally routed** — only `/items*` has a listener rule (default action is 404). `/health` is the internal target-group health-check path (task is healthy). Add a listener rule for it if external health checks are ever wanted — a small template refinement.
+- The **`infra-reviewer` agent stalled** (watchdog timeout, not a finding); the critical IAM/SG/cost items were verified manually against the module source, and the two deployer-coverage gaps were resolved empirically before/after the apply.
+- **CI does not yet run the service's `npm test`** (only a docker build) — worth adding when the service CI is formalized (the `/new-service` PRD).
+- **Node 20 deprecation** on the pinned actions persists — bump majors in a maintenance pass.
+- **Next:** extract `services/_template/` + the `/new-service` command (the follow-up PRD) so services become self-service.
+
+Modules/topology: [ADR 0002](../../architecture/decisions/0002-terraform-configuration-topology.md). Operational docs: `docs/operations/` (documentation-keeper).
