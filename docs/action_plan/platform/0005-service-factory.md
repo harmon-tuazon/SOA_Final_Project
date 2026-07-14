@@ -4,7 +4,7 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-14
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-14 (user)
@@ -107,4 +107,24 @@ terraform -chdir=terraform/app destroy   # -> ~$0
 
 ## Outcome
 
-_Filled after execution._
+Executed as planned; the factory is built and the pipeline proven generic. Shipped in PR #8 (`Add service factory: _template, service-contract, /new-service; remove items; generalize pipeline`), merged to `main`.
+
+**Delivered:**
+- `services/_template/` — genericized from `items` with placeholder tokens (`__SERVICE_NAME__`, `__RESOURCE__`, `__TABLE_ENV__`); `npm test` (health) passes.
+- `.claude/rules/service-contract.md` — the binding app + infra contract and naming conventions.
+- `.claude/commands/new-service.md` — the `/new-service` procedure (app interview → per-service PRD → **approval gate** → scaffold app + Terraform → PR). Registered as a skill.
+- `items` fully removed: `services/items/` deleted, `items_*` module blocks/outputs stripped from `terraform/app/`, no `items` reference in the workflows.
+- Pipeline generalized: `ci.yml`/`cd.yml` discover `services/*` (excluding `_template`) and derive `soa-<name>` names — 0..N services, 0-service safe.
+- `CLAUDE.md` golden-path pointer; `compute-layer.md`/`adding-a-service.md`/`overview.md` repointed items → `_template`.
+
+**Verification:**
+- CI green on PR #8; merge CD ran 3m49s — "Discover services" found none, build loop no-op'd, full `terraform apply` created network + cluster + ALB (no service). Confirms the generalized pipeline handles the empty case (criteria #4, #5).
+- `terraform -chdir=terraform/app validate` passes with `items` gone (criterion #3).
+- Post-merge `terraform -chdir=terraform/app destroy` → **15 destroyed, ~$0** (criterion #7).
+
+**Deviations / notes:**
+- The `/new-service` example Terraform block was missing `name_prefix` (a required input on both the `data` and `ecs-service` modules); fixed in the command file before closeout so a generated service passes `validate`.
+- `infra-reviewer` (criterion #6) stalled on a watchdog timeout with no verdict; the critical items (keyless OIDC preserved, role separation, `_template` correctly excluded, no billable surprises beyond the transient ALB) were verified manually by reading the workflow + module diffs.
+- Criterion #8 (a `/new-service` dry-run) is deferred to the first real service — the command is reviewed for consistency against the live modules and is ready to run. Building the first domain service (Order/Product/User) via `/new-service` will exercise it end-to-end.
+
+**Follow-ups (unchanged from §9):** async worker template (SQS/Lambda), S3 frontend + Cognito + HTTPS, and per-service `npm test` in CI.
