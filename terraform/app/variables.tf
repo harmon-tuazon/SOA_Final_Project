@@ -25,7 +25,7 @@ variable "public_subnet_cidrs" {
 }
 
 variable "image_tag" {
-  description = "Tag of the container image CD deploys for the items service (a git commit SHA — never \"latest\"). Defaults to \"bootstrap\" so the first apply can create the ECR repo before any image has been pushed; CD overrides this with $GITHUB_SHA on every deploy."
+  description = "Tag of the container image CD deploys for each service (a git commit SHA — never \"latest\"). Defaults to \"bootstrap\" so the first apply can create an ECR repo before any image has been pushed; CD overrides this with $GITHUB_SHA on every deploy. Currently unused until a service module consumes it again."
   type        = string
   default     = "bootstrap"
 }

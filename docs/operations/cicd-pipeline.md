@@ -18,10 +18,10 @@ Workflow sources: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml), 
 
 ### `cd.yml` — Terraform apply
 
-- **Trigger:** `push` to `main`, filtered to `paths: terraform/app/**` (plus the `cd.yml` workflow file itself, so edits to the pipeline retrigger it). Narrowed from a blanket `terraform/**` filter in [PRD platform/0003](../action_plan/platform/0003-network.md) — a push that only touches the human-applied `terraform/` root or `terraform/bootstrap/` no longer fires CD, since there is nothing there for the pipeline to apply.
+- **Trigger:** `push` to `main`, filtered to `paths: terraform/app/**` and `services/**` (plus the `cd.yml` workflow file itself). Narrowed from a blanket `terraform/**` filter in [PRD platform/0003](../action_plan/platform/0003-network.md) — a push that only touches the human-applied `terraform/` root or `terraform/bootstrap/` no longer fires CD. `services/**` is included so an application-code change (a new commit SHA → new image → rolling deploy) also triggers a deploy.
 - **Auth:** assumes `soa-deployer` via OIDC (`vars.AWS_DEPLOY_ROLE_ARN`).
 - **Working directory:** `terraform/app/`.
-- **Steps:** `terraform init` against the shared state bucket, `terraform apply -auto-approve` — both scoped to `terraform/app/`.
+- **Steps:** `terraform init` against the shared state bucket, then (for each service under `services/*`, excluding `_template`) build + push its `soa-<name>` image, then `terraform apply -auto-approve` — all scoped to `terraform/app/`. See [compute-layer.md](compute-layer.md) for the full per-service build/deploy sequence.
 - **Why the path filter is safe here:** unlike `ci.yml`, `cd.yml` is not a required branch-protection check, so a push to `main` that doesn't touch `terraform/app/**` simply not triggering it is harmless — there's nothing to apply. See §5 for why the same filter would be unsafe on the CI side.
 
 Both workflows declare `permissions: id-token: write` (needed to mint the OIDC token) and `contents: read` only — no other GitHub token scopes.

@@ -35,7 +35,18 @@
       "PowerShell(terraform --% -chdir=terraform/app destroy -auto-approve -no-color)",
       "PowerShell(git stash)",
       "PowerShell(git checkout -b closeout-0004)",
-      "PowerShell(git stash pop 2>&1)"
+      "PowerShell(git stash pop 2>&1)",
+      "PowerShell(gh pr checks 7 --watch --interval 20)",
+      "PowerShell(gh pr merge 7 --squash --delete-branch)",
+      "PowerShell(git restore .claude/settings.json)",
+      "PowerShell(git branch -D add-ecs-items closeout-0004 2>&1)",
+      "Bash(where actionlint *)",
+      "Bash(docker version *)",
+      "Bash(bash -n \"C:/Users/harmo/AppData/Local/Temp/claude/c--Users-harmo-Desktop-SOA-Final-Project/825f56d6-01ab-4184-9da1-6e043e568eab/scratchpad/ci_block.sh\")",
+      "Bash(rm -rf \"C:/Users/harmo/AppData/Local/Temp/claude/c--Users-harmo-Desktop-SOA-Final-Project/825f56d6-01ab-4184-9da1-6e043e568eab/scratchpad\"/*.sh)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\harmo\\AppData\\Local\\Temp\\claude\\c--Users-harmo-Desktop-SOA-Final-Project\\825f56d6-01ab-4184-9da1-6e043e568eab\\scratchpad"
     ]
   }
 }

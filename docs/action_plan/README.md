@@ -13,3 +13,4 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | [0002 — CI/CD Pipeline (Infrastructure)](platform/0002-cicd-pipeline.md) | Done |
 | [0003 — Network Foundation (terraform/app VPC)](platform/0003-network.md) | Done |
 | [0004 — ECS + ALB (compute + golden-path modules)](platform/0004-ecs-alb.md) | Done |
+| [0005 — Service Factory (template + contract + /new-service)](platform/0005-service-factory.md) | In Progress |

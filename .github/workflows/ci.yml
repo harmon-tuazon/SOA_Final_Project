@@ -20,13 +20,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Catches Dockerfile/build errors on the PR (PRD platform/0004 §7).
-      # No AWS auth, no push — just proves the image builds. Context is the
-      # repo root's services/items dir, so override the job's default
-      # terraform/app working directory for this one step.
-      - name: Docker build (items)
+      # Catches Dockerfile/build errors on the PR (PRD platform/0004 §7,
+      # generalized by platform/0005 §3). No AWS auth, no push — just proves
+      # each service's image builds. Iterates every services/<name> dir
+      # except the never-deployed _template; with zero services this loop
+      # simply runs zero times and the step passes. Context is the repo
+      # root, so override the job's default terraform/app working directory
+      # for this one step.
+      - name: Docker build (every service)
         working-directory: .
-        run: docker build -t items:ci services/items
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for dir in services/*/; do
+            name=$(basename "$dir")
+            [ "$name" = "_template" ] && continue
+            echo "::group::docker build services/$name"
+            docker build -t "$name:ci" "services/$name"
+            echo "::endgroup::"
+          done
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

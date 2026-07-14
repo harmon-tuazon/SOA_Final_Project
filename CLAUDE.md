@@ -94,6 +94,8 @@ Container-first microservices and event-driven functions:
 
 Language and framework per service follow the specs/ADRs under `docs/` — keep each unit small, single-purpose, and cloud-native. Every behavioural change ships with tests (unit / integration / e2e). Delegate application work to the `app-engineer` agent.
 
+**The golden path.** New services are scaffolded from `services/_template/` — usually via the **`/new-service`** command ([`.claude/commands/new-service.md`](.claude/commands/new-service.md)), which interviews the developer, generates a per-service PRD, and (on approval) scaffolds the app **plus** its `data`/`ecs-service` Terraform blocks. Every service must follow the binding **[`.claude/rules/service-contract.md`](.claude/rules/service-contract.md)** (config from env, `/health`, own DynamoDB table, boundary-scoped task role, standard naming). The CI/CD pipeline auto-discovers services under `services/*` (skipping `_template`).
+
 **Build the app to its spec, not from scratch.** The services, APIs, data model, and behaviour follow the specs under `docs/architecture/` (derived from [PROJECT REQUIREMENTS.md](PROJECT%20REQUIREMENTS.md)).
 
 ## Documentation
