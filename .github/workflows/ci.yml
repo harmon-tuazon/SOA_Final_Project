@@ -20,6 +20,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Catches Dockerfile/build errors on the PR (PRD platform/0004 §7).
+      # No AWS auth, no push — just proves the image builds. Context is the
+      # repo root's services/items dir, so override the job's default
+      # terraform/app working directory for this one step.
+      - name: Docker build (items)
+        working-directory: .
+        run: docker build -t items:ci services/items
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 

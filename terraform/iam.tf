@@ -475,6 +475,27 @@ data "aws_iam_policy_document" "deployer_permissions" {
     resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.name_prefix}-*"]
   }
 
+  # IAM service-linked roles: AWS auto-creates these the first time an account
+  # uses ECS, ELB, or ECS Service Auto Scaling. They are AWS-managed roles under
+  # /aws-service-role/ (not soa-*), so this is a separate grant, condition-scoped
+  # to exactly those three service principals — it cannot mint arbitrary roles.
+  statement {
+    sid       = "CreateServiceLinkedRoles"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values = [
+        "ecs.amazonaws.com",
+        "ecs.application-autoscaling.amazonaws.com",
+        "elasticloadbalancing.amazonaws.com",
+      ]
+    }
+  }
+
   # Explicit DENY, evaluated ahead of every Allow above (IAM deny always
   # wins). Two halves, because these actions authorize against different
   # resource types:

@@ -15,7 +15,15 @@
       "Bash(pip install *)",
       "Bash(echo \"lint exit: $?\")",
       "Bash(gh auth *)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(terraform -v)",
+      "Bash(rm -f nul)",
+      "Bash(terraform plan *)",
+      "Bash(grep -E \"will be created\" /tmp_plan_output.txt)",
+      "Bash(echo \"fmt exit: $?\")",
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); yaml.safe_load\\(open\\('.github/workflows/cd.yml'\\)\\); print\\('YAML OK'\\)\")",
+      "Bash(python -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); yaml.safe_load\\(open\\('.github/workflows/cd.yml'\\)\\); print\\('YAML OK'\\)\")",
+      "PowerShell(aws iam list-roles --path-prefix /aws-service-role/ --query \"Roles[].RoleName\" --output text)"
     ]
   }
 }

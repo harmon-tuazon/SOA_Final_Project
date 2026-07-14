@@ -1,0 +1,23 @@
+# Root ignores for application code (Node services/functions + frontend).
+# Terraform artifacts are handled by the .gitignore files under terraform/.
+
+# Node dependencies (each service/function installs its own)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Local env files — never commit these (a committed .env.example is fine)
+.env
+.env.local
+.env.*.local
+
+# Build / test output
+dist/
+build/
+coverage/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

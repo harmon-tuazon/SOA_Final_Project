@@ -23,3 +23,9 @@ variable "public_subnet_cidrs" {
   type        = list(string)
   default     = ["10.0.0.0/24", "10.0.1.0/24"]
 }
+
+variable "image_tag" {
+  description = "Tag of the container image CD deploys for the items service (a git commit SHA — never \"latest\"). Defaults to \"bootstrap\" so the first apply can create the ECR repo before any image has been pushed; CD overrides this with $GITHUB_SHA on every deploy."
+  type        = string
+  default     = "bootstrap"
+}

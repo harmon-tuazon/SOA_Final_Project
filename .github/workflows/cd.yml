@@ -4,10 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      # CD only applies terraform/app/ (ADR 0002); the identity foundation in
-      # terraform/ root and terraform/bootstrap/ are human-applied. Trigger on
-      # app changes and on changes to this workflow itself.
+      # CD applies terraform/app/ (ADR 0002) AND builds/deploys service images.
+      # The identity foundation in terraform/ root and bootstrap/ are
+      # human-applied. Trigger on infra changes, application code changes
+      # (new commit SHA -> new image -> rolling deploy), and this workflow.
       - 'terraform/app/**'
+      - 'services/**'
       - '.github/workflows/cd.yml'
 
 permissions:
@@ -38,5 +40,54 @@ jobs:
       - name: Terraform init
         run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
-      - name: Terraform apply
-        run: terraform apply -auto-approve
+      # --- First-run ECR ordering (PRD platform/0004 §9) ------------------
+      # The items ECR repo is Terraform-managed (module.items_service ->
+      # aws_ecr_repository.this). On the very first run it doesn't exist yet,
+      # but the ECS task definition needs a real pushed image to become
+      # healthy, and the image can't be pushed before the repo exists. Apply
+      # just the repo first (image_tag stays at its "bootstrap" default —
+      # fine, since we're not touching the service here). On every later run
+      # this is a no-op (repo already in state, 0 changes).
+      - name: Terraform apply (ECR repository only)
+        run: terraform apply -auto-approve -target=module.items_service.aws_ecr_repository.this
+
+      - name: Get ECR repository URL
+        id: ecr
+        run: echo "repository_url=$(terraform output -raw items_ecr_repository_url)" >> "$GITHUB_OUTPUT"
+
+      # --- Build + push the items image, tagged by commit SHA -------------
+      # Never :latest. soa-deployer already has ecr:* (push/login).
+      - name: Log in to Amazon ECR
+        working-directory: .
+        env:
+          REPOSITORY_URL: ${{ steps.ecr.outputs.repository_url }}
+        run: |
+          aws ecr get-login-password --region ${{ vars.AWS_REGION }} \
+            | docker login --username AWS --password-stdin "${REPOSITORY_URL%%/*}"
+
+      - name: Build items image
+        working-directory: .
+        run: docker build -t "${{ steps.ecr.outputs.repository_url }}:${{ github.sha }}" services/items
+
+      - name: Push items image
+        working-directory: .
+        run: docker push "${{ steps.ecr.outputs.repository_url }}:${{ github.sha }}"
+
+      # --- Full apply, pointing the task definition at the pushed tag -----
+      # Creates the rest of the stack (cluster, ALB, service, autoscaling on
+      # first run) and, on every run, updates the task def's image tag.
+      # Terraform registering a new task def revision is what triggers ECS's
+      # rolling deploy — no separate `aws ecs update-service` needed.
+      - name: Terraform apply (full, with the pushed image tag)
+        run: terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
+
+      # --- Wait for the rollout to actually go healthy ---------------------
+      # ECS brings up the new task set and health-checks it behind the ALB
+      # before draining the old one; a failed health check leaves the last
+      # good task definition serving and this wait times out / fails the
+      # job, so a bad deploy never reports green.
+      - name: Wait for the items ECS service to reach steady state
+        run: |
+          CLUSTER=$(terraform output -raw ecs_cluster_id)
+          SERVICE=$(terraform output -raw items_service_name)
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
