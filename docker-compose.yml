@@ -1,26 +1,10 @@
 # Local dev only. Mirrors the shape of terraform/app/ (one block per service)
 # without touching infra — this file is app-engineer owned.
 #
-# Before first run, create the local "items" table once against DynamoDB
-# Local (see services/items/README.md for the exact `aws dynamodb
-# create-table` command), then `docker-compose up`.
+# services/_template is the golden-path skeleton for new services (never run
+# directly — see services/_template/README.md). Add a block per real service
+# here, modeled on the template, once it's scaffolded via /new-service.
 services:
-  items:
-    build: ./services/items
-    ports:
-      - "3000:3000"
-    environment:
-      ITEMS_TABLE: items
-      PORT: 3000
-      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
-      AWS_REGION: us-east-1
-      # Dummy credentials — DynamoDB Local does not validate them, but the
-      # SDK requires something to be present. Never real credentials here.
-      AWS_ACCESS_KEY_ID: local
-      AWS_SECRET_ACCESS_KEY: local
-    depends_on:
-      - dynamodb-local
-
   dynamodb-local:
     image: amazon/dynamodb-local
     ports:

@@ -17,7 +17,7 @@ ECS services and the shared ALB (see [ADR 0001](decisions/0001-platform-and-comp
 
 ## Compute
 
-Synchronous microservices run as **ECS Fargate** tasks in the public subnets above, behind a **single shared Application Load Balancer** — one ALB for every service, not one each, per [ADR 0001](decisions/0001-platform-and-compute-architecture.md)'s cost posture. The ALB's one HTTP listener routes by path: each service registers its own listener rule (e.g. `/items*`); anything unmatched gets a fixed 404.
+Synchronous microservices run as **ECS Fargate** tasks in the public subnets above, behind a **single shared Application Load Balancer** — one ALB for every service, not one each, per [ADR 0001](decisions/0001-platform-and-compute-architecture.md)'s cost posture. The ALB's one HTTP listener routes by path: each service registers its own listener rule (e.g. `/orders*`); anything unmatched gets a fixed 404.
 
 Each service gets its **own DynamoDB table(s)** — polyglot persistence, no shared database between services — and its **own IAM task role**, scoped to only its own table(s) and carrying the shared `soa-boundary`. A single **shared ECS task execution role** (image pull + log write only) is reused across every service, since that part is never service-specific. Task security groups only allow the app port in from the ALB's security group, so nothing reaches a task except through the load balancer.
 

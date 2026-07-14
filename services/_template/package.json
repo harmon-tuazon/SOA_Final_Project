@@ -1,8 +1,8 @@
 {
-  "name": "items",
+  "name": "__SERVICE_NAME__",
   "version": "1.0.0",
   "private": true,
-  "description": "Reference ECS microservice (golden-path template) — items CRUD over DynamoDB",
+  "description": "ECS microservice scaffolded from services/_template — replace this description",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

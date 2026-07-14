@@ -40,54 +40,98 @@ jobs:
       - name: Terraform init
         run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
-      # --- First-run ECR ordering (PRD platform/0004 §9) ------------------
-      # The items ECR repo is Terraform-managed (module.items_service ->
-      # aws_ecr_repository.this). On the very first run it doesn't exist yet,
-      # but the ECS task definition needs a real pushed image to become
-      # healthy, and the image can't be pushed before the repo exists. Apply
-      # just the repo first (image_tag stays at its "bootstrap" default —
-      # fine, since we're not touching the service here). On every later run
-      # this is a no-op (repo already in state, 0 changes).
-      - name: Terraform apply (ECR repository only)
-        run: terraform apply -auto-approve -target=module.items_service.aws_ecr_repository.this
+      # --- Discover services (PRD platform/0005 §3) ------------------------
+      # Every services/<name> dir except the never-deployed _template maps to
+      # a `module.<name>_service` (ecs-service) block in terraform/app/main.tf
+      # (naming convention: ECR repo + ECS service = "soa-<name>"). With zero
+      # services this list is empty and every loop below no-ops.
+      - name: Discover services
+        working-directory: .
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          services=""
+          for dir in services/*/; do
+            name=$(basename "$dir")
+            [ "$name" = "_template" ] && continue
+            services="$services $name"
+          done
+          services="$(echo "$services" | xargs)"
+          echo "SERVICES=$services" >> "$GITHUB_ENV"
+          echo "Discovered services: ${services:-<none>}"
 
-      - name: Get ECR repository URL
-        id: ecr
-        run: echo "repository_url=$(terraform output -raw items_ecr_repository_url)" >> "$GITHUB_OUTPUT"
+      # --- First-run ECR ordering (PRD platform/0004 §9, generalized) -----
+      # Each service's ECR repo is Terraform-managed
+      # (module.<name>_service -> aws_ecr_repository.this). On a service's
+      # very first run its repo doesn't exist yet, but the ECS task
+      # definition needs a real pushed image to become healthy, and the
+      # image can't be pushed before the repo exists. Apply just each repo
+      # first (image_tag stays at its "bootstrap" default — fine, since
+      # we're not touching the service here). On every later run this is a
+      # no-op (repo already in state, 0 changes). Targeted, so it never
+      # touches an already-running service's task definition/image.
+      - name: Terraform apply (ECR repositories only)
+        run: |
+          set -euo pipefail
+          for name in $SERVICES; do
+            echo "::group::ensure ECR repo for $name"
+            terraform apply -auto-approve -target="module.${name}_service.aws_ecr_repository.this"
+            echo "::endgroup::"
+          done
 
-      # --- Build + push the items image, tagged by commit SHA -------------
-      # Never :latest. soa-deployer already has ecr:* (push/login).
+      # --- Build + push every service image, tagged by commit SHA ---------
+      # Never :latest. soa-deployer already has ecr:* (push/login). Registry
+      # is derived from the caller account + region rather than a
+      # per-service Terraform output, since the registry is the same for
+      # every repo (<account>.dkr.ecr.<region>.amazonaws.com/soa-<name>).
+      - name: Get AWS account ID
+        id: account
+        working-directory: .
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
       - name: Log in to Amazon ECR
         working-directory: .
         env:
-          REPOSITORY_URL: ${{ steps.ecr.outputs.repository_url }}
+          REGISTRY: ${{ steps.account.outputs.id }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
         run: |
           aws ecr get-login-password --region ${{ vars.AWS_REGION }} \
-            | docker login --username AWS --password-stdin "${REPOSITORY_URL%%/*}"
+            | docker login --username AWS --password-stdin "$REGISTRY"
 
-      - name: Build items image
+      - name: Build and push service images
         working-directory: .
-        run: docker build -t "${{ steps.ecr.outputs.repository_url }}:${{ github.sha }}" services/items
+        env:
+          REGISTRY: ${{ steps.account.outputs.id }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+        run: |
+          set -euo pipefail
+          for name in $SERVICES; do
+            image="$REGISTRY/soa-$name:${{ github.sha }}"
+            echo "::group::build + push $image"
+            docker build -t "$image" "services/$name"
+            docker push "$image"
+            echo "::endgroup::"
+          done
 
-      - name: Push items image
-        working-directory: .
-        run: docker push "${{ steps.ecr.outputs.repository_url }}:${{ github.sha }}"
-
-      # --- Full apply, pointing the task definition at the pushed tag -----
-      # Creates the rest of the stack (cluster, ALB, service, autoscaling on
-      # first run) and, on every run, updates the task def's image tag.
-      # Terraform registering a new task def revision is what triggers ECS's
-      # rolling deploy — no separate `aws ecs update-service` needed.
+      # --- Full apply, pointing every service's task def at the pushed tag -
+      # Creates the rest of the stack (cluster, ALB, services, autoscaling
+      # on first run) and, on every run, updates each task def's image tag
+      # to $GITHUB_SHA. Terraform registering a new task def revision is
+      # what triggers ECS's rolling deploy — no separate
+      # `aws ecs update-service` needed. With zero services this just
+      # applies the shared network + cluster + ALB.
       - name: Terraform apply (full, with the pushed image tag)
         run: terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
 
-      # --- Wait for the rollout to actually go healthy ---------------------
+      # --- Wait for every service's rollout to actually go healthy --------
       # ECS brings up the new task set and health-checks it behind the ALB
       # before draining the old one; a failed health check leaves the last
       # good task definition serving and this wait times out / fails the
       # job, so a bad deploy never reports green.
-      - name: Wait for the items ECS service to reach steady state
+      - name: Wait for each ECS service to reach steady state
         run: |
+          set -euo pipefail
           CLUSTER=$(terraform output -raw ecs_cluster_id)
-          SERVICE=$(terraform output -raw items_service_name)
-          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          for name in $SERVICES; do
+            echo "::group::wait for soa-$name"
+            aws ecs wait services-stable --cluster "$CLUSTER" --services "soa-$name"
+            echo "::endgroup::"
+          done

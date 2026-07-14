@@ -6,7 +6,9 @@ const {
   PutCommand,
 } = require('@aws-sdk/lib-dynamodb');
 
-const ITEMS_TABLE = process.env.ITEMS_TABLE;
+// PLACEHOLDER: __TABLE_ENV__ is the env var name holding this service's
+// DynamoDB table name (e.g. ITEMS_TABLE). Replaced by /new-service.
+const TABLE_NAME = process.env.__TABLE_ENV__;
 
 // Local dev (docker-compose) points at DynamoDB Local via DYNAMODB_ENDPOINT.
 // In AWS, no endpoint override is set, so the SDK talks to real DynamoDB
@@ -30,18 +32,20 @@ app.get('/health', (req, res) => {
   res.status(200).type('text/plain').send('OK');
 });
 
-app.get('/items', async (req, res) => {
+// PLACEHOLDER: __RESOURCE__ is the REST resource noun (e.g. items, orders).
+// Replaced by /new-service, along with the route paths below.
+app.get('/__RESOURCE__', async (req, res) => {
   try {
     const result = await docClient.send(
-      new ScanCommand({ TableName: ITEMS_TABLE })
+      new ScanCommand({ TableName: TABLE_NAME })
     );
     res.status(200).json(result.Items || []);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to read items' });
+    res.status(500).json({ error: 'Failed to read __RESOURCE__' });
   }
 });
 
-app.post('/items', async (req, res) => {
+app.post('/__RESOURCE__', async (req, res) => {
   const item = req.body;
 
   if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length === 0) {
@@ -51,13 +55,13 @@ app.post('/items', async (req, res) => {
   try {
     await docClient.send(
       new PutCommand({
-        TableName: ITEMS_TABLE,
+        TableName: TABLE_NAME,
         Item: item,
       })
     );
     res.status(201).json(item);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to write item' });
+    res.status(500).json({ error: 'Failed to write __RESOURCE__' });
   }
 });
 

@@ -42,41 +42,9 @@ module "cluster" {
   boundary_arn      = local.boundary_arn
 }
 
-# --- Reference service: items -----------------------------------------------
+# --- Services --------------------------------------------------------------
 #
-# Proves the whole "paved road" — a data table + an ecs-service block is all
-# a new service needs (PRD platform/0004 §3/§6). Future services copy this
-# pattern.
-
-module "items_table" {
-  source = "./modules/data"
-
-  name_prefix = var.name_prefix
-  name        = "items"
-  hash_key    = "id"
-}
-
-module "items_service" {
-  source = "./modules/ecs-service"
-
-  name_prefix = var.name_prefix
-  region      = var.region
-  name        = "items"
-  port        = 3000
-  route       = "/items*"
-  priority    = 100
-  image_tag   = var.image_tag
-
-  table_arns = [module.items_table.arn]
-  env = {
-    ITEMS_TABLE = module.items_table.name
-  }
-
-  vpc_id             = module.network.vpc_id
-  public_subnet_ids  = module.network.public_subnet_ids
-  cluster_id         = module.cluster.cluster_id
-  alb_sg_id          = module.cluster.alb_sg_id
-  listener_arn       = module.cluster.listener_arn
-  execution_role_arn = module.cluster.execution_role_arn
-  boundary_arn       = local.boundary_arn
-}
+# No services are wired here yet. Each new service adds a `data` module
+# (its own DynamoDB table) + an `ecs-service` module (its ECS
+# service/task/listener rule) block below, following the pattern retired
+# with `items` (PRD platform/0005). Use `/new-service` to scaffold one.

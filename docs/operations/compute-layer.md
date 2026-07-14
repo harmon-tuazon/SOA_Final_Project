@@ -14,7 +14,7 @@ Created once, for the whole app, by `modules/ecs-cluster/`:
 - **One HTTP `:80` listener** (`aws_lb_listener`) with a **default action of a fixed 404 response**. Each service adds its own **path-based listener rule** (`aws_lb_listener_rule`, in `modules/ecs-service/`) on top of this shared listener — the cluster module never knows which services exist.
 - No HTTPS/ACM/domain yet (HTTP-only demo posture — see PRD platform/0004 §9).
 
-A service's route is whatever `path_pattern` its listener rule matches (e.g. `items` uses `/items*` — see [`terraform/app/main.tf`](../../terraform/app/main.tf)). A path with no matching rule falls through to the listener's default 404.
+A service's route is whatever `path_pattern` its listener rule matches (e.g. a service named `orders` would use `/orders*` — see the `route`/`priority` inputs in [`terraform/app/main.tf`](../../terraform/app/main.tf) and the naming conventions in [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md)). A path with no matching rule falls through to the listener's default 404. As of [PRD platform/0005](../action_plan/platform/0005-service-factory.md), `main.tf` wires zero services by default — services are added via [`/new-service`](../../.claude/commands/new-service.md) or the manual recipe in [adding-a-service.md](adding-a-service.md).
 
 ## 2. Two IAM roles per task — execution vs. task role
 
@@ -38,14 +38,15 @@ Tasks run in the same public subnets as the ALB (no NAT gateway, per ADR 0001) a
 
 ## 4. Pipeline: build, push, deploy
 
-`cd.yml` (triggered on push to `main` touching `terraform/app/**`, `services/**`, or the workflow file itself — see [`cicd-pipeline.md`](cicd-pipeline.md)) sequences four steps to solve the chicken-and-egg between "the ECR repo doesn't exist yet" and "the task needs a real image to go healthy":
+`cd.yml` (triggered on push to `main` touching `terraform/app/**`, `services/**`, or the workflow file itself — see [`cicd-pipeline.md`](cicd-pipeline.md)) is generalized ([PRD platform/0005](../action_plan/platform/0005-service-factory.md)) to loop over **every** service, handling 0..N of them, and sequences five steps to solve the chicken-and-egg between "the ECR repo doesn't exist yet" and "the task needs a real image to go healthy":
 
-1. **Targeted apply — ECR repo only** (`terraform apply -target=module.items_service.aws_ecr_repository.this`). On the very first run this creates just the repo; on every later run it's a no-op (already in state). Nothing else in the stack is touched by this step.
-2. **Build + push the image**, tagged with `$GITHUB_SHA` (never `:latest`), to the repo from step 1.
-3. **Full `terraform apply -var="image_tag=$GITHUB_SHA"`** — creates the rest of the stack on first run (cluster, ALB, service, autoscaling) and, on every run, points the task definition at the newly pushed tag. Terraform registering a new task-definition revision is what triggers ECS's rolling deploy — no separate `aws ecs update-service` call is needed.
-4. **`aws ecs wait services-stable`** — blocks until the new task set is healthy behind the ALB (or the old one still is, in which case the wait times out and the job fails red — a bad deploy never reports green).
+1. **Discover services** — list `services/*`, excluding the never-deployed `_template`, into a `$SERVICES` list. Each discovered `<name>` maps to a `module.<name>_service` block in `terraform/app/main.tf` (naming convention: ECR repo + ECS service = `soa-<name>`, per [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md)). With zero services this list is empty and every step below no-ops.
+2. **Targeted apply — ECR repo only, per service** (`terraform apply -target=module.<name>_service.aws_ecr_repository.this`, once per discovered service). On a service's very first run this creates just its repo; on every later run it's a no-op (already in state). Nothing else in the stack is touched by this step.
+3. **Build + push each image**, tagged with `$GITHUB_SHA` (never `:latest`) as `soa-<name>:$GITHUB_SHA`, to the repo from step 2. The registry (`<account>.dkr.ecr.<region>.amazonaws.com`) is derived from the caller's account ID and the configured region, not a per-service Terraform output — the registry is the same for every repo.
+4. **One full `terraform apply -var="image_tag=$GITHUB_SHA"`** — creates the rest of the stack on first run (cluster, ALB, every discovered service's task def/service/autoscaling) and, on every run, points each task definition at its newly pushed tag. Terraform registering a new task-definition revision is what triggers ECS's rolling deploy — no separate `aws ecs update-service` call is needed. With zero services this step just applies the shared network + cluster + ALB.
+5. **`aws ecs wait services-stable`, per service** — blocks until each new task set is healthy behind the ALB (or the old one still is, in which case the wait times out and the job fails red — a bad deploy never reports green).
 
-See [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) for the exact commands. CI (`ci.yml`, on pull request) only builds the service's Docker image (to catch Dockerfile errors) and runs `terraform plan` — it does not push or apply.
+See [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) for the exact commands. CI (`ci.yml`, on pull request) discovers the same `services/*` set (excluding `_template`), builds each one's Docker image (to catch Dockerfile errors), and runs `terraform plan` — it does not push or apply.
 
 ## 5. Deployer permissions: grows with new resource types
 
@@ -58,7 +59,7 @@ This is expected, not a one-time gap: **the deployer accrues scoped permissions 
 
 ## 6. `/health` is not externally routed
 
-Every service's target group health-checks `GET /health` (`health_check_path`, default in `modules/ecs-service/variables.tf`) — this is what ECS/the ALB use internally to decide a task is up. It is **not** the same as a listener rule: only a service's own route (e.g. `/items*`) gets forwarded by the shared listener. Hitting `/health` from outside the ALB (with no listener rule for it) falls through to the listener's default 404, even though the task itself is healthy. Add an explicit listener rule for `/health` on a per-service basis if an externally-checkable health endpoint is ever wanted.
+Every service's target group health-checks `GET /health` (`health_check_path`, default in `modules/ecs-service/variables.tf`) — this is what ECS/the ALB use internally to decide a task is up. It is **not** the same as a listener rule: only a service's own route (e.g. `/orders*`) gets forwarded by the shared listener. Hitting `/health` from outside the ALB (with no listener rule for it) falls through to the listener's default 404, even though the task itself is healthy. Add an explicit listener rule for `/health` on a per-service basis if an externally-checkable health endpoint is ever wanted.
 
 ## 7. Cost and teardown
 
@@ -77,8 +78,10 @@ removes the cluster, ALB, every service's ECS resources, and (per service) the E
 
 ## Related docs
 
-- [adding-a-service.md](adding-a-service.md) — the manual recipe for wiring a new service onto this compute layer.
+- [adding-a-service.md](adding-a-service.md) — the `/new-service` and manual paths for wiring a new service onto this compute layer.
+- [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md) — the binding app + infra contract every service (and the pipeline's discovery loop) relies on.
 - [terraform-foundation.md](terraform-foundation.md) — the `soa-boundary` pattern, OIDC/keyless auth, and the identity foundation this layer's roles depend on.
 - [cicd-pipeline.md](cicd-pipeline.md) — the workflows' triggers, auth, and operational rules in full.
-- [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for everything in this doc.
+- [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the cluster/ALB/modules described in this doc.
+- [PRD platform/0005](../action_plan/platform/0005-service-factory.md) — the plan and outcome for generalizing the pipeline's build/push/deploy loop over `services/*`.
 - [ADR 0001](../architecture/decisions/0001-platform-and-compute-architecture.md) / [ADR 0002](../architecture/decisions/0002-terraform-configuration-topology.md) — the decisions behind this shape.
