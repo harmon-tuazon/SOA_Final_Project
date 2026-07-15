@@ -337,6 +337,69 @@ data "aws_iam_policy_document" "deployer_permissions" {
     resources = ["*"]
   }
 
+  # S3 frontend bucket: scoped BUCKET-level management for the SPA static
+  # website (PRD frontend/0001, human-applied). The bucket lives in
+  # pipeline-applied app-base, so soa-deployer needs create/manage powers on
+  # it — scoped by name prefix to "soa-frontend-*" only, distinct from and
+  # never overlapping with the Terraform state bucket ("soa-tfstate-*",
+  # covered separately by TerraformStateAccess above). Enumerates the
+  # bucket-attribute reads Terraform's aws_s3_bucket/_website_configuration/
+  # _public_access_block/_policy/_ownership_controls resources perform on
+  # every refresh, plus the writes those resources need to apply — so a
+  # plan/apply never hits AccessDenied on an attribute Terraform silently
+  # reads. Deliberately excludes s3:DeleteBucket (see the explicit Deny
+  # below) — the deployer manages this bucket's contents/config but must
+  # never delete the bucket itself, mirroring the DynamoDB DeleteTable
+  # pattern.
+  statement {
+    sid    = "FrontendBucketManagement"
+    effect = "Allow"
+    actions = [
+      "s3:CreateBucket",
+      "s3:PutBucketPolicy",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketPolicyStatus",
+      "s3:PutBucketWebsite",
+      "s3:GetBucketWebsite",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:PutBucketOwnershipControls",
+      "s3:GetBucketOwnershipControls",
+      "s3:PutBucketTagging",
+      "s3:GetBucketTagging",
+      "s3:GetBucketAcl",
+      "s3:GetBucketLocation",
+      "s3:GetBucketVersioning",
+      "s3:GetBucketCORS",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetBucketRequestPayment",
+      "s3:GetBucketLogging",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetReplicationConfiguration",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetAccelerateConfiguration",
+      "s3:GetBucketNotification",
+      "s3:ListBucket",
+    ]
+    resources = ["arn:aws:s3:::${var.name_prefix}-frontend-*"]
+  }
+
+  # S3 frontend bucket: object read/write/delete for the SPA build output
+  # and the backend-owned config.json — frontend-cd.yml (build sync) and
+  # backend cd.yml (config.json refresh) both act as soa-deployer.
+  # DeleteObject is required so `aws s3 sync --delete` can prune assets from
+  # a previous deploy.
+  statement {
+    sid    = "FrontendObjectAccess"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
+    ]
+    resources = ["arn:aws:s3:::${var.name_prefix}-frontend-*/*"]
+  }
+
   # DynamoDB: scoped table CONTROL-PLANE management for self-serve tables
   # (PRD platform/0006, "Option 2" — tightened after infra-review). This is
   # now the PRIMARY and ONLY DynamoDB grant on this role: the previous
@@ -574,6 +637,20 @@ data "aws_iam_policy_document" "deployer_permissions" {
       "dynamodb:DeleteBackup",
     ]
     resources = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-*"]
+  }
+
+  # Explicit DENY: BACKSTOP mirroring DenyDynamoDbTableDeletion above, for
+  # the frontend bucket (PRD frontend/0001). FrontendBucketManagement above
+  # never grants s3:DeleteBucket in the first place — this Deny is defense
+  # in depth so a future edit can't accidentally re-add it. The bucket is a
+  # permanent app-base resource (holds the SPA + config.json); intentional
+  # deletion is a deliberate human action outside the pipeline's reach, not
+  # something soa-deployer can do.
+  statement {
+    sid       = "DenyFrontendBucketDeletion"
+    effect    = "Deny"
+    actions   = ["s3:DeleteBucket"]
+    resources = ["arn:aws:s3:::${var.name_prefix}-frontend-*"]
   }
 
   # Explicit DENY, evaluated ahead of every Allow above (IAM deny always

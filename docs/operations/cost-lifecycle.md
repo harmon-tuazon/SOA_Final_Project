@@ -6,8 +6,10 @@ Config sources: [`terraform/app-base/`](../../terraform/app-base/) (permanent, f
 
 ## The two lifecycles, in one line each
 
-- **`terraform/app-base/`** — network, ECS cluster, shared execution role, ALB security group, and every service's DynamoDB table. **Applied by the pipeline, never destroyed.** Entirely free (no ALB, no running tasks in this config).
+- **`terraform/app-base/`** — network, ECS cluster, shared execution role, ALB security group, every service's DynamoDB table, and (per [ADR 0004](../architecture/decisions/0004-frontend-hosting.md)) the frontend's S3 website bucket. **Applied by the pipeline, never destroyed.** Entirely free (no ALB, no running tasks in this config).
 - **`terraform/app-edge/`** — the shared ALB + HTTP listener, and every service's `ecs-service` module (task def, ECS service, target group, listener rule, autoscaling). **Applied by the pipeline; this is what routine teardown destroys.** The ALB (~$16/mo while it exists) plus any running Fargate tasks are the only billable resources in the whole app tier.
+
+**The frontend is not part of either lifecycle's cost, and not part of the teardown cycle.** The SPA's S3 bucket lives in `app-base` — a few MB of static assets well within the S3 free tier — so it's always-on at ~$0 and, unlike the ALB, its **website endpoint is stable**: it does not change across `app-edge` teardown/spin-up cycles. Only the SPA's *backend API calls* are affected by an `app-edge` teardown (they fail gracefully — see `frontend/src/lib/api.ts`'s "backend unavailable" handling); the site itself keeps loading. See [ADR 0004](../architecture/decisions/0004-frontend-hosting.md) and [adding-a-frontend-feature.md](adding-a-frontend-feature.md).
 
 ## One-time: how `app-base` first comes to exist
 
@@ -54,7 +56,7 @@ Nothing has to be recreated by hand. Either:
   terraform -chdir=terraform/app-edge apply
   ```
 
-Either way, every service's **data is still in its table** — `app-base` was never touched, so nothing needed to be restored. The only thing that changes on recreation is the **ALB's DNS name** (a new `aws_lb` gets issued a new one each time `app-edge` is recreated) — every consumer reads the API base URL from config/env rather than a hardcoded value, per the [no-hardcoded-endpoint rule](../../.claude/rules/service-contract.md), so this doesn't break anything; get the current DNS name with `terraform -chdir=terraform/app-edge output alb_dns_name`.
+Either way, every service's **data is still in its table** — `app-base` was never touched, so nothing needed to be restored. The only thing that changes on recreation is the **ALB's DNS name** (a new `aws_lb` gets issued a new one each time `app-edge` is recreated) — every consumer reads the API base URL from config/env rather than a hardcoded value, per the [no-hardcoded-endpoint rule](../../.claude/rules/service-contract.md), so this doesn't break anything; get the current DNS name with `terraform -chdir=terraform/app-edge output alb_dns_name`. The same `cd.yml` run that recreates `app-edge` also rewrites the frontend's `config.json` on S3 with the new ALB DNS (see [ADR 0004](../architecture/decisions/0004-frontend-hosting.md)) — the SPA (already up, in `app-base`) picks up the new URL on its next page load, with no frontend redeploy needed.
 
 ## Why `app-base` survives a teardown
 
@@ -69,8 +71,11 @@ Deleting a table entirely (true end-of-project teardown) is a **deliberate, huma
 
 - [ADR 0003 — Base/Edge Split](../architecture/decisions/0003-base-edge-split.md) — the decision and reasoning behind this split.
 - [ADR 0002 — Terraform Configuration Topology](../architecture/decisions/0002-terraform-configuration-topology.md) — the original identity/app lifecycle split this refines.
+- [ADR 0004 — Frontend Hosting](../architecture/decisions/0004-frontend-hosting.md) — why the frontend lives in `app-base` and survives every edge teardown.
 - [compute-layer.md](compute-layer.md) — what the cluster/ALB/modules do, now split across the two configs.
 - [adding-a-service.md](adding-a-service.md) — how a new service's two Terraform blocks land in `app-base` and `app-edge`.
-- [cicd-pipeline.md](cicd-pipeline.md) — how CD applies `app-base` then `app-edge`.
+- [adding-a-frontend-feature.md](adding-a-frontend-feature.md) — how the frontend picks up a new API URL after a teardown/spin-up cycle.
+- [cicd-pipeline.md](cicd-pipeline.md) — how CD applies `app-base` then `app-edge`, and refreshes the frontend's `config.json`.
 - [terraform-foundation.md](terraform-foundation.md) — the human-applied identity foundation this all depends on.
 - [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) — the plan and (once filled in) outcome for this split.
+- [PRD frontend/0001](../action_plan/frontend/0001-spa-scaffold-and-hosting.md) — the plan and outcome for the frontend's hosting.

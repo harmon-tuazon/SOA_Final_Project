@@ -1,0 +1,88 @@
+name: Frontend CD
+
+# Builds the React SPA and syncs it to the S3 website bucket (PRD
+# frontend/0001). The bucket lives in the PERMANENT, human/pipeline-applied
+# `terraform/app-base` (PRD platform/0006) — this workflow only reads its
+# `frontend_bucket_name` output via `terraform output`, it never applies.
+# Keyless OIDC as soa-deployer, scoped to `soa-frontend-*` S3 only (see
+# terraform/iam.tf, human-applied).
+#
+# `config.json` (the live API base URL) is owned by the backend `cd.yml`,
+# which writes it after each app-edge apply — this workflow deliberately
+# excludes it from the sync so a frontend-only redeploy never clobbers the
+# live API URL.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-cd.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build + sync SPA to S3
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials (OIDC, deployer role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # app-base does not read remote state and declares no state_bucket
+      # variable, so only the backend-config bucket (for init) is needed
+      # here — no TF_VAR_state_bucket. Read-only: init + output, never apply.
+      - name: Terraform init (app-base)
+        working-directory: terraform/app-base
+        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+
+      - name: Resolve frontend bucket name
+        id: bucket
+        working-directory: terraform/app-base
+        run: echo "name=$(terraform output -raw frontend_bucket_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync SPA to S3 (excluding config.json)
+        env:
+          BUCKET: ${{ steps.bucket.outputs.name }}
+        run: |
+          set -euo pipefail
+          aws s3 sync frontend/dist/ "s3://$BUCKET/" --delete --exclude config.json
+
+      # Hashed JS/CSS assets are cache-forever by default; index.html must be
+      # non-cacheable so a new deploy is visible immediately instead of being
+      # served stale from a browser/proxy cache.
+      - name: Set index.html to no-cache
+        env:
+          BUCKET: ${{ steps.bucket.outputs.name }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://$BUCKET/index.html" "s3://$BUCKET/index.html" \
+            --metadata-directive REPLACE \
+            --cache-control no-cache \
+            --content-type text/html

@@ -27,6 +27,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Enforce the no-hardcoded-endpoint rule (service-contract.md): services
+      # and functions must read the API base URL / downstream endpoints from
+      # config/env, never a literal ALB DNS baked into source (it churns each
+      # edge teardown). Tolerates the dirs not existing yet (no services).
+      - name: No hardcoded endpoints
+        run: |
+          for d in services functions; do
+            if [ -d "$d" ] && grep -rInE "elb\.amazonaws\.com" "$d"; then
+              echo "::error::Hardcoded API endpoint found in $d — read it from config/env instead."
+              exit 1
+            fi
+          done
+
       # Catches Dockerfile/build errors on the PR (PRD platform/0004 §7,
       # generalized by platform/0005 §3). No AWS auth, no push — just proves
       # each service's image builds. Iterates every services/<name> dir

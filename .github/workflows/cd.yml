@@ -148,6 +148,26 @@ jobs:
         working-directory: terraform/app-edge
         run: terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
 
+      # --- Refresh the frontend's runtime API URL (PRD frontend/0001) -----
+      # The SPA (hosted in app-base's `soa-frontend-*` bucket) never
+      # hardcodes the ALB DNS — it fetches /config.json at startup. Only the
+      # backend knows the current API URL (the ALB DNS churns across
+      # app-edge apply/destroy cycles), so CD owns writing it here, right
+      # after app-edge applies. frontend-cd.yml deploys the SPA bundle itself
+      # and deliberately excludes config.json from its sync so a
+      # frontend-only redeploy never clobbers the live API URL. The ALB
+      # always exists after this apply (even with zero services behind it),
+      # so this step is safe unconditionally.
+      - name: Refresh frontend config.json with current API URL
+        run: |
+          set -euo pipefail
+          ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
+          BUCKET=$(terraform -chdir=terraform/app-base output -raw frontend_bucket_name)
+          echo "{\"apiBaseUrl\":\"http://$ALB\"}" > config.json
+          aws s3 cp config.json "s3://$BUCKET/config.json" \
+            --content-type application/json \
+            --cache-control no-cache
+
       # --- Wait for every service's rollout to actually go healthy --------
       # ECS brings up the new task set and health-checks it behind the ALB
       # before draining the old one; a failed health check leaves the last

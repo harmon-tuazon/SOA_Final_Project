@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# Editor/OS
+.DS_Store
+
+# Local env overrides (never commit real values)
+.env
+.env.local

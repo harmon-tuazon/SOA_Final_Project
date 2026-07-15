@@ -36,3 +36,13 @@ output "alb_sg_id" {
   description = "ID of the ALB's security group (owned here so it survives app-edge teardown/recreate). Read by app-edge via terraform_remote_state; the app-edge ALB references this id rather than creating its own."
   value       = module.cluster.alb_sg_id
 }
+
+output "frontend_bucket_name" {
+  description = "Name of the S3 bucket hosting the React SPA. Read by frontend-cd.yml (sync target) and backend cd.yml (config.json refresh target)."
+  value       = module.frontend.bucket_name
+}
+
+output "frontend_website_endpoint" {
+  description = "HTTP website endpoint the SPA is served from (S3 static website hosting)."
+  value       = module.frontend.website_endpoint
+}
