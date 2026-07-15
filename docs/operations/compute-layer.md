@@ -70,7 +70,7 @@ Every service's target group health-checks `GET /health` (`health_check_path`, d
 
 ## 7. Cost and teardown
 
-Per [ADR 0003](../architecture/decisions/0003-base-edge-split.md), the compute layer described in this doc now spans two configs with different lifecycles — only **`terraform/app-edge/`** is torn down between sessions to return spend to ~$0; **`terraform/app-base/`** (network, cluster, execution role, ALB SG, every table) stays up, permanently, at $0. Only two resources in the whole compute layer are billable, and both live in `app-edge`:
+Per [ADR 0003](../architecture/decisions/0003-base-edge-split.md), the compute layer described in this doc now spans two configs with different lifecycles — only **`terraform/app-edge/`** is torn down between sessions to return spend to ~$0; **`terraform/app-base/`** (network, cluster, execution role, ALB SG, every table, and the frontend S3 site bucket — see [ADR 0004](../architecture/decisions/0004-frontend-hosting.md)) stays up, permanently, at $0. Only two resources in the whole compute layer are billable, and both live in `app-edge`:
 
 - The **ALB** (~$16/mo while it exists).
 - Each **Fargate task** (~$9/mo per always-on 0.25 vCPU / 0.5 GB task at 1 task minimum).

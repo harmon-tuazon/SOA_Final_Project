@@ -12,6 +12,7 @@ The worked reference is `services/_template/` (the skeleton) and the shared Terr
 4. **One process, containerized.** Ship the standard Dockerfile (small, multi-stage-friendly, **non-root**, `EXPOSE`s the app port, runs one Node process). Listen on `$PORT` (default 3000).
 5. **Own your data.** Each service owns exactly its **own DynamoDB table(s)** — no shared database, no reaching into another service's tables. Read/write via the AWS SDK with typed/parameterised calls (no injectable queries).
 6. **Tests ship with the service.** At minimum a `/health` test that needs no AWS; behavioural changes ship with tests.
+7. **CORS for the browser.** A service the SPA calls **directly from the browser** must return CORS headers (`Access-Control-Allow-Origin` for the SPA's origin, and handle the `OPTIONS` preflight). The SPA is served from the S3 website origin and calls the ALB on a *different* origin, so without CORS the browser blocks the response **even when the ALB is reachable**. (Service-to-service calls don't run in a browser and don't need this.) Read the allowed origin from config/env — don't hardcode it. See [ADR 0004](../../docs/architecture/decisions/0004-frontend-hosting.md).
 
 ## The infrastructure contract (how a service is wired — the platform side)
 

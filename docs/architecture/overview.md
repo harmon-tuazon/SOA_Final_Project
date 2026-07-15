@@ -23,9 +23,17 @@ Each service gets its **own DynamoDB table(s)** — polyglot persistence, no sha
 
 This is built as a **paved-road module pattern**: a service is one `data` module block (its table) + one `ecs-service` module block (its ECR repo, task role, target group, listener rule, task definition, ECS service, autoscaling), on top of the shared `ecs-cluster` module (cluster + execution role + ALB security group) and `alb` module (the ALB + listener itself). As of [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) / [ADR 0003](decisions/0003-base-edge-split.md), the two module blocks for a given service **do not live in the same config** — see "Where this lives in Terraform" below. The `items` service ([`services/items/`](../../services/items/)) is the reference instance proving this pattern end-to-end. See [operations/compute-layer.md](../operations/compute-layer.md) for how the cluster/roles/pipeline work, and [operations/adding-a-service.md](../operations/adding-a-service.md) for the recipe to add another service — concrete resource shapes and inputs live in [`terraform/modules/ecs-cluster/`](../../terraform/modules/ecs-cluster/), [`terraform/modules/alb/`](../../terraform/modules/alb/), [`terraform/modules/ecs-service/`](../../terraform/modules/ecs-service/), and [`terraform/modules/data/`](../../terraform/modules/data/), not restated here.
 
+## Frontend
+
+The demo React SPA ([`frontend/`](../../frontend/)) — a Part 4 "showcase" asset, beyond the graded backend rubric — is hosted as an **S3 static website over plain HTTP**, per [ADR 0004](decisions/0004-frontend-hosting.md). It is provisioned by [`terraform/modules/frontend/`](../../terraform/modules/frontend/), wired into **`app-base`** (not `app-edge`) — permanent and free, so it stays reachable across every routine `app-edge` teardown/spin-up cycle; only its backend API calls degrade gracefully while the edge is down.
+
+The SPA never hardcodes the backend's API URL. It fetches a runtime `/config.json` object once at startup (`src/lib/config.ts`, awaited before render in `src/main.tsx`); backend `cd.yml` rewrites that file on S3 with the live ALB DNS after every `app-edge` apply, and `frontend-cd.yml` (the frontend's own build+deploy workflow) excludes `config.json` from its sync so a frontend-only deploy never clobbers the live URL. See [ADR 0004](decisions/0004-frontend-hosting.md) for the full reasoning, and [operations/adding-a-frontend-feature.md](../operations/adding-a-frontend-feature.md) for how a page/feature is added.
+
+HTTPS (CloudFront + a custom domain) and real Cognito auth are **deferred** to one later, coherent PRD — an HTTPS-served page cannot call today's HTTP-only ALB (mixed content), and Cognito's hosted UI requires HTTPS redirect URIs. Only an auth stub (`src/auth/AuthContext.tsx`, `src/auth/ProtectedRoute.tsx`) is scaffolded for now.
+
 ## No hardcoded endpoints (project-wide convention)
 
-Because the ALB is recreated on every teardown/spin-up cycle (see "Where this lives in Terraform" below), its DNS name is not stable across sessions. Every consumer — the future React frontend, and any service-to-service call — **reads the API base URL from config/env, never a literal ALB DNS name, IP, or endpoint in source**. This is a binding rule in [`service-contract.md`](../../.claude/rules/service-contract.md)'s application contract, enforced by a CI-visible grep for `elb.amazonaws.com` in `services/`/`functions/`. It also makes a future stable domain (Route 53 custom domain, deferred — see [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §3 out-of-scope) a one-value config change rather than a source change once it lands.
+Because the ALB is recreated on every teardown/spin-up cycle (see "Where this lives in Terraform" below), its DNS name is not stable across sessions. Every consumer — the React frontend (see Frontend above), and any service-to-service call — **reads the API base URL from config/env, never a literal ALB DNS name, IP, or endpoint in source**. This is a binding rule in [`service-contract.md`](../../.claude/rules/service-contract.md)'s application contract, enforced by a CI-visible grep for `elb.amazonaws.com` in `services/`/`functions/` (and, for the frontend, `frontend/src/`). It also makes a future stable domain (Route 53 custom domain, deferred — see [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §3 out-of-scope) a one-value config change rather than a source change once it lands.
 
 ## Where this lives in Terraform
 
@@ -41,10 +49,13 @@ Neither config is the human-applied identity foundation in `terraform/` root. Se
 - [ADR 0001 — Platform & Compute Architecture](decisions/0001-platform-and-compute-architecture.md) — why ECS/Fargate + public subnets over EKS/private networking.
 - [ADR 0002 — Terraform Configuration Topology](decisions/0002-terraform-configuration-topology.md) — why the network and compute layer live in a separate, destroyable config, apart from the identity foundation.
 - [ADR 0003 — Base/Edge Split](decisions/0003-base-edge-split.md) — why that billable config is itself split into a permanent `app-base` and a destroyable `app-edge`.
+- [ADR 0004 — Frontend Hosting](decisions/0004-frontend-hosting.md) — why the SPA is S3-hosted over HTTP with a runtime `config.json`, and why HTTPS/auth are deferred.
 - [PRD platform/0003 — Network Foundation](../action_plan/platform/0003-network.md) — the plan and outcome for the network resources described above.
 - [PRD platform/0004 — ECS + ALB](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the compute layer and golden-path modules.
 - [PRD platform/0006 — Base/Edge Split](../action_plan/platform/0006-base-edge-split.md) — the plan and outcome for the base/edge split.
+- [PRD frontend/0001 — SPA Scaffold + S3 Hosting](../action_plan/frontend/0001-spa-scaffold-and-hosting.md) — the plan and outcome for the frontend described above.
 - [operations/compute-layer.md](../operations/compute-layer.md) — how the cluster, ALB, IAM roles, and pipeline deploy work.
 - [operations/adding-a-service.md](../operations/adding-a-service.md) — the recipe for wiring a new service onto the compute layer.
+- [operations/adding-a-frontend-feature.md](../operations/adding-a-frontend-feature.md) — the recipe for adding a page/feature to the SPA.
 - [operations/cicd-pipeline.md](../operations/cicd-pipeline.md) — how the pipeline applies `app-base` and `app-edge`.
 - [operations/cost-lifecycle.md](../operations/cost-lifecycle.md) — the teardown/spin-up procedure.

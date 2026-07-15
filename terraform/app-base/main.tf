@@ -51,6 +51,20 @@ module "cluster" {
   boundary_arn = local.boundary_arn
 }
 
+# --- Frontend hosting: S3 static website for the React SPA (PRD
+#     frontend/0001) -------------------------------------------------------
+#
+# Permanent, always-on, ~$0 (a few MB of static assets within the S3 free
+# tier). Lives in app-base (not app-edge) so the SPA survives the routine
+# `terraform destroy` of edge/compute between sessions.
+
+module "frontend" {
+  source = "../modules/frontend"
+
+  name_prefix = var.name_prefix
+  account_id  = data.aws_caller_identity.current.account_id
+}
+
 # --- Service tables ----------------------------------------------------------
 #
 # No services are wired here yet. Each new service adds a `data` module
