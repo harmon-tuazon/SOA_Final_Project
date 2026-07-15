@@ -4,7 +4,7 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-14
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-14 (user)
@@ -136,4 +136,25 @@ Billable/destructive commands named explicitly: the transient `app-edge` apply (
 
 ## Outcome
 
-_Filled after execution._
+Executed as planned and proven end-to-end. Shipped in PR #10 (`Split terraform/app into app-base + app-edge`), merged to `main`.
+
+**Delivered:**
+- `terraform/app-base/` (permanent, free) + `terraform/app-edge/` (destroyable) split, separate state keys, both pipeline-applied. Shared modules moved to `terraform/modules/`; ALB extracted into a new `modules/alb/`. Old `terraform/app/` retired. EDGE reads BASE via `terraform_remote_state`; per-service table ARNs constructed as strings.
+- Self-serve tables, **data-safe by IAM** (tightened beyond the original plan after infra-review — see deviation): the deployer's DynamoDB grant is **control-plane only** (`DynamoDbTableLifecycleManagement`, 10 enumerated actions incl. `ListTagsOfResource`), the broad `dynamodb:*`/`*` grant **removed**, an explicit `DeleteTable`/`DeleteBackup` **Deny** kept as backstop, all region-scoped. Deployer state access narrowed to `app-base/*`+`app-edge/*` (no access to the `platform/` identity state).
+- Pipeline: `cd.yml` applies `app-base` → `app-edge`; `ci.yml` plans both (check name unchanged). ADR 0003, the `cost-lifecycle.md` runbook, the no-hardcoded-endpoint convention, and `service-contract.md`/`new-service.md` all updated to the two-config pattern.
+
+**Verification (all criteria met):**
+- CI green on PR #10 (fmt + validate/plan on **both** configs; `app-edge` plan resolved `app-base`'s remote state). Criteria #1–4, #10.
+- Root IAM apply → `0 add, 1 change, 0 destroy` (deployer policy). `app-base` apply → **13 added, all free** (no ALB, no tasks) — criterion #3.
+- Merge CD ran **3m30s green** — applied `app-base` (no-op) then `app-edge` (ALB created) with the tightened deployer IAM, 0-service loops no-op'd. Criteria #5, #6 (self-serve, no human step post-bootstrap).
+- `terraform -chdir=terraform/app-edge destroy` → 2 destroyed (ALB + listener); `app-base plan` → **"No changes"**; `aws elbv2` shows **0 `soa-alb`**; VPC `available` + cluster `ACTIVE`. Criteria #7, #11 — teardown hits EDGE only, BASE + data survive at ~$0.
+- No-hardcoded-endpoint rule in `service-contract.md`; grep clean. Criterion #9.
+
+**Deviations (approved):**
+- **IAM tightened beyond "preserve existing statements."** infra-reviewer found the pre-existing broad `dynamodb:*`/`*` grant meant the `DeleteTable` deny only protected the table object, not its rows — so the PRD's headline "can never delete data" guarantee was not fully real. With user approval, the broad grant was dropped, the scoped grant made control-plane-only (+`ListTagsOfResource`), and `TerraformStateAccess` narrowed to the app keys (closing a hole where the deployer could delete the identity foundation's state). This makes the guarantee airtight and improves least-privilege. Criteria #6/#8 updated accordingly.
+- **First-run bootstrap:** because CI's `app-edge` plan reads `app-base`'s remote state, `app-base` was applied **once, locally** before opening the PR (a deliberate one-time stand-up of the permanent free base). Thereafter CD keeps it applied.
+- **ECR repos live in `app-edge`** (part of `modules/ecs-service`), so a service's repo/images churn on each edge teardown/recreate — intentional and harmless (images are SHA-tagged and rebuilt on spin-up; keeps ECR at $0 while idle). Documented in `compute-layer.md`.
+
+**Follow-ups (unchanged):** async worker template (SQS/Lambda); S3 frontend + Cognito + HTTPS; the deferred Route 53 custom domain (the no-hardcoded-endpoint convention is its groundwork); the first real domain service via `/new-service` — which will exercise the self-serve table path for real.
+
+**Steady state now:** BASE stands permanently at ~$0 (VPC, cluster, roles, SG, and — once created — tables + data). EDGE is up only during work sessions; `terraform -chdir=terraform/app-edge destroy` returns to ~$0 between them. See [cost-lifecycle.md](../../operations/cost-lifecycle.md).
