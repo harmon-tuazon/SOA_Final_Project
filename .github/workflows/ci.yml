@@ -8,13 +8,20 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  # app-edge's terraform_remote_state read of app-base's state (PRD
+  # platform/0006) needs the state bucket name as a variable, since backend
+  # blocks can't take variables/interpolation and the bucket name (it embeds
+  # the account id) is deliberately kept out of committed files. Same bucket
+  # as TF_STATE_BUCKET used for `terraform init -backend-config`. Harmless
+  # for app-base steps, which don't declare this variable.
+  TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
 jobs:
   terraform-plan:
+    # Required branch-protection check — do not rename this job.
     name: Terraform fmt / validate / plan
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: terraform/app
 
     steps:
       - name: Checkout
@@ -24,11 +31,8 @@ jobs:
       # generalized by platform/0005 §3). No AWS auth, no push — just proves
       # each service's image builds. Iterates every services/<name> dir
       # except the never-deployed _template; with zero services this loop
-      # simply runs zero times and the step passes. Context is the repo
-      # root, so override the job's default terraform/app working directory
-      # for this one step.
+      # simply runs zero times and the step passes.
       - name: Docker build (every service)
-        working-directory: .
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -50,14 +54,48 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Terraform fmt check (repo-wide)
-        working-directory: .
         run: terraform fmt -check -recursive
 
-      - name: Terraform init
+      # --- app-base: network + cluster + execution role + ALB SG + tables -
+      # (PRD platform/0006, superseding the single terraform/app/ config
+      # from ADR 0002.) Read-only: init/validate/plan as soa-ci-plan, never
+      # applied by CI.
+      - name: Terraform init (app-base)
+        working-directory: terraform/app-base
         run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
-      - name: Terraform validate
+      - name: Terraform validate (app-base)
+        working-directory: terraform/app-base
         run: terraform validate
 
-      - name: Terraform plan
+      - name: Terraform plan (app-base)
+        working-directory: terraform/app-base
+        run: terraform plan -lock=false
+
+      # --- app-edge: ALB + listener + every service's ecs-service module --
+      # app-edge reads app-base's outputs via terraform_remote_state, which
+      # needs TF_VAR_state_bucket (set at job level above) and app-base's
+      # state object to already exist in S3. `terraform validate` doesn't
+      # evaluate data sources so it's unaffected either way; `terraform plan`
+      # does the remote-state read.
+      #
+      # NOTE for whoever opens the very first PR of the base/edge split: on
+      # that PR, app-base's state does not exist yet (base is only created
+      # once CD applies it after this PR merges), so this app-edge plan step
+      # will fail on the missing remote-state object. That is expected and
+      # self-resolving — base lands on the first merge to main, and every
+      # PR after that has a real app-base state to plan against. If this
+      # blocks the very first merge, it needs a human call (e.g. a one-off
+      # manual `terraform apply` of app-base, or waiving this step for that
+      # one PR) rather than a workflow change.
+      - name: Terraform init (app-edge)
+        working-directory: terraform/app-edge
+        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+
+      - name: Terraform validate (app-edge)
+        working-directory: terraform/app-edge
+        run: terraform validate
+
+      - name: Terraform plan (app-edge)
+        working-directory: terraform/app-edge
         run: terraform plan -lock=false

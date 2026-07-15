@@ -9,6 +9,12 @@
 # this is a single, root-level identity concern with no per-service inputs
 # to parameterize yet. If task/execution roles grow into their own
 # per-service module later, this file is the natural place to split from.
+#
+# This file is HUMAN-APPLIED (`terraform -chdir=terraform apply` with admin
+# credentials) — soa-deployer cannot modify its own IAM (see the self-edit
+# denies below), so identity-foundation changes, including the self-serve
+# table grant/deny added by PRD platform/0006, always need a local apply by
+# a human. The pipeline (cd.yml) never touches this config.
 
 # --- Account identity --------------------------------------------------------
 #
@@ -215,8 +221,27 @@ resource "aws_iam_policy" "boundary" {
 
 data "aws_iam_policy_document" "deployer_permissions" {
 
-  # Terraform remote state: read/write objects in the state bucket only
-  # (created by terraform/bootstrap/, not managed by this role).
+  # Terraform remote state: read/write objects in the state bucket, scoped to
+  # exactly the two keys this role applies — "app-base/" and "app-edge/"
+  # (PRD platform/0006 infra-review tightening). s3:ListBucket keeps the
+  # bucket-level ARN (that action authorizes against the bucket itself, not
+  # an object key, so it can't be key-prefix-scoped further; it's still
+  # needed for the S3 backend to check for/lock state). The object-level ARN
+  # is narrowed from a bucket-wide "*/*" wildcard to just these two
+  # prefixes, each covering both a config's "terraform.tfstate" and its
+  # native S3-lock object (use_lockfile writes a lock object alongside the
+  # state under the same key prefix) — so GetObject/PutObject/DeleteObject
+  # for both state and locking still work. "app-edge/"'s read of
+  # "app-base/terraform.tfstate" via terraform_remote_state is plain
+  # s3:GetObject, already covered by the "app-base/*" entry — no separate
+  # grant needed.
+  #
+  # Deliberately EXCLUDES "platform/*" — the identity foundation's own state
+  # (this root config, human-applied). The deployer is assumable by any push
+  # to main, so it must never be able to read, overwrite, or delete that
+  # state, even though the object-level actions were previously
+  # indistinguishable from app-base/app-edge access under one bucket-wide
+  # wildcard.
   statement {
     sid    = "TerraformStateAccess"
     effect = "Allow"
@@ -228,7 +253,8 @@ data "aws_iam_policy_document" "deployer_permissions" {
     ]
     resources = [
       "arn:aws:s3:::${var.name_prefix}-tfstate-*",
-      "arn:aws:s3:::${var.name_prefix}-tfstate-*/*",
+      "arn:aws:s3:::${var.name_prefix}-tfstate-*/app-base/*",
+      "arn:aws:s3:::${var.name_prefix}-tfstate-*/app-edge/*",
     ]
   }
 
@@ -311,12 +337,38 @@ data "aws_iam_policy_document" "deployer_permissions" {
     resources = ["*"]
   }
 
-  # DynamoDB: per-service application tables.
+  # DynamoDB: scoped table CONTROL-PLANE management for self-serve tables
+  # (PRD platform/0006, "Option 2" — tightened after infra-review). This is
+  # now the PRIMARY and ONLY DynamoDB grant on this role: the previous
+  # broad "dynamodb:*" on "*" statement has been removed entirely, because
+  # it still allowed data-plane deletes (DeleteItem, BatchWriteItem,
+  # PartiQL deletes, etc.) on every table — the DeleteTable Deny below only
+  # ever protected the table OBJECT, not the data inside it. Exactly the
+  # actions Terraform's aws_dynamodb_table resource needs to create/read/
+  # update a table and keep its state refreshed — no data-plane actions
+  # (Get/Put/Query/Scan/...; those belong solely to each service's task
+  # role, scoped by the boundary), no DeleteTable/DeleteBackup (the explicit
+  # Deny below is a backstop against a future statement re-adding one, not
+  # the sole protection anymore). ListTagsOfResource is required for
+  # Terraform to refresh a table's tags on plan/apply once the broad grant
+  # is gone — without it, refresh breaks on any tag drift. Scoped to soa-*
+  # tables in this project's region only, never account-wide.
   statement {
-    sid       = "DynamoDbManagement"
-    effect    = "Allow"
-    actions   = ["dynamodb:*"]
-    resources = ["*"]
+    sid    = "DynamoDbTableLifecycleManagement"
+    effect = "Allow"
+    actions = [
+      "dynamodb:CreateTable",
+      "dynamodb:DescribeTable",
+      "dynamodb:UpdateTable",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:TagResource",
+      "dynamodb:UntagResource",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:UpdateTimeToLive",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:UpdateContinuousBackups",
+    ]
+    resources = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-*"]
   }
 
   # SQS: the async work queue between ECS and Lambda.
@@ -499,6 +551,29 @@ data "aws_iam_policy_document" "deployer_permissions" {
         "elasticloadbalancing.amazonaws.com",
       ]
     }
+  }
+
+  # Explicit DENY: BACKSTOP for the data-safety guarantee on self-serve
+  # tables (PRD platform/0006, "Option 2" — tightened after infra-review).
+  # The primary protection is now that DynamoDbTableLifecycleManagement above
+  # simply never grants DeleteTable/DeleteBackup (and the old account-wide
+  # "dynamodb:*" statement is gone entirely) — soa-deployer has no DynamoDB
+  # delete permission of any kind on soa-* tables to begin with. This Deny is
+  # defense in depth on top of that: IAM deny always wins regardless of any
+  # Allow and regardless of statement order, so even if a future edit
+  # accidentally re-adds a broad "dynamodb:*"-style grant, table (and
+  # backup) deletion still fails closed with AccessDenied instead of
+  # silently wiping data. Intentional table deletion is a deliberate, human
+  # `terraform apply` with admin credentials against terraform/app-base/ —
+  # never something the pipeline can do.
+  statement {
+    sid    = "DenyDynamoDbTableDeletion"
+    effect = "Deny"
+    actions = [
+      "dynamodb:DeleteTable",
+      "dynamodb:DeleteBackup",
+    ]
+    resources = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-*"]
   }
 
   # Explicit DENY, evaluated ahead of every Allow above (IAM deny always

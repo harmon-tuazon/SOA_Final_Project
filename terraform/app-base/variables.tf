@@ -1,4 +1,4 @@
-# Input variables for the app config.
+# Input variables for the app-base config.
 
 variable "region" {
   description = "AWS region all resources are created in. Single-region deployment; change this one value to move regions."
@@ -22,10 +22,4 @@ variable "public_subnet_cidrs" {
   description = "CIDR blocks for the public subnets, one per Availability Zone."
   type        = list(string)
   default     = ["10.0.0.0/24", "10.0.1.0/24"]
-}
-
-variable "image_tag" {
-  description = "Tag of the container image CD deploys for each service (a git commit SHA — never \"latest\"). Defaults to \"bootstrap\" so the first apply can create an ECR repo before any image has been pushed; CD overrides this with $GITHUB_SHA on every deploy. Currently unused until a service module consumes it again."
-  type        = string
-  default     = "bootstrap"
 }

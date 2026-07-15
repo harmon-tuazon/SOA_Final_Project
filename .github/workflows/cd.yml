@@ -4,11 +4,16 @@ on:
   push:
     branches: [main]
     paths:
-      # CD applies terraform/app/ (ADR 0002) AND builds/deploys service images.
-      # The identity foundation in terraform/ root and bootstrap/ are
-      # human-applied. Trigger on infra changes, application code changes
-      # (new commit SHA -> new image -> rolling deploy), and this workflow.
-      - 'terraform/app/**'
+      # CD applies terraform/app-base/ THEN terraform/app-edge/ (PRD
+      # platform/0006, superseding the single terraform/app/ config from ADR
+      # 0002) AND builds/deploys service images. The identity foundation in
+      # terraform/ root and bootstrap/ are human-applied. Trigger on infra
+      # changes to either config or the shared modules they both use,
+      # application code changes (new commit SHA -> new image -> rolling
+      # deploy), and this workflow.
+      - 'terraform/app-base/**'
+      - 'terraform/app-edge/**'
+      - 'terraform/modules/**'
       - 'services/**'
       - '.github/workflows/cd.yml'
 
@@ -16,13 +21,19 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  # app-edge's terraform_remote_state read of app-base's state (PRD
+  # platform/0006) needs the state bucket name as a variable, since backend
+  # blocks can't take variables/interpolation and the bucket name (it embeds
+  # the account id) is deliberately kept out of committed files. Same bucket
+  # as TF_STATE_BUCKET used for `terraform init -backend-config`. Harmless
+  # for app-base steps, which don't declare this variable.
+  TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
 jobs:
   terraform-apply:
     name: Terraform apply
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: terraform/app
 
     steps:
       - name: Checkout
@@ -37,16 +48,21 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Terraform init
+      - name: Terraform init (app-base)
+        working-directory: terraform/app-base
+        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+
+      - name: Terraform init (app-edge)
+        working-directory: terraform/app-edge
         run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
       # --- Discover services (PRD platform/0005 §3) ------------------------
       # Every services/<name> dir except the never-deployed _template maps to
-      # a `module.<name>_service` (ecs-service) block in terraform/app/main.tf
-      # (naming convention: ECR repo + ECS service = "soa-<name>"). With zero
+      # a `module.<name>_service` (ecs-service, in app-edge/main.tf) and a
+      # `module.<name>_table` (data, in app-base/main.tf) block (naming
+      # convention: ECR repo + ECS service = "soa-<name>"). With zero
       # services this list is empty and every loop below no-ops.
       - name: Discover services
-        working-directory: .
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -60,17 +76,22 @@ jobs:
           echo "SERVICES=$services" >> "$GITHUB_ENV"
           echo "Discovered services: ${services:-<none>}"
 
-      # --- First-run ECR ordering (PRD platform/0004 §9, generalized) -----
+      # --- First-run ECR ordering (PRD platform/0004 §9, generalized;
+      #     repointed to app-edge by PRD platform/0006) --------------------
       # Each service's ECR repo is Terraform-managed
-      # (module.<name>_service -> aws_ecr_repository.this). On a service's
-      # very first run its repo doesn't exist yet, but the ECS task
-      # definition needs a real pushed image to become healthy, and the
-      # image can't be pushed before the repo exists. Apply just each repo
-      # first (image_tag stays at its "bootstrap" default — fine, since
+      # (module.<name>_service -> aws_ecr_repository.this, in app-edge — the
+      # ecs-service module lives in the destroyable/billable half of the
+      # split). On a service's very first run its repo doesn't exist yet, but
+      # the ECS task definition needs a real pushed image to become healthy,
+      # and the image can't be pushed before the repo exists. Apply just each
+      # repo first (image_tag stays at its "bootstrap" default — fine, since
       # we're not touching the service here). On every later run this is a
       # no-op (repo already in state, 0 changes). Targeted, so it never
-      # touches an already-running service's task definition/image.
+      # touches an already-running service's task definition/image, and
+      # (being a -target apply of only the ECR resource) needs neither
+      # app-base to be applied yet nor the ALB/cluster to exist.
       - name: Terraform apply (ECR repositories only)
+        working-directory: terraform/app-edge
         run: |
           set -euo pipefail
           for name in $SERVICES; do
@@ -86,11 +107,9 @@ jobs:
       # every repo (<account>.dkr.ecr.<region>.amazonaws.com/soa-<name>).
       - name: Get AWS account ID
         id: account
-        working-directory: .
         run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Amazon ECR
-        working-directory: .
         env:
           REGISTRY: ${{ steps.account.outputs.id }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
         run: |
@@ -98,7 +117,6 @@ jobs:
             | docker login --username AWS --password-stdin "$REGISTRY"
 
       - name: Build and push service images
-        working-directory: .
         env:
           REGISTRY: ${{ steps.account.outputs.id }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
         run: |
@@ -111,25 +129,35 @@ jobs:
             echo "::endgroup::"
           done
 
-      # --- Full apply, pointing every service's task def at the pushed tag -
-      # Creates the rest of the stack (cluster, ALB, services, autoscaling
-      # on first run) and, on every run, updates each task def's image tag
-      # to $GITHUB_SHA. Terraform registering a new task def revision is
-      # what triggers ECS's rolling deploy — no separate
-      # `aws ecs update-service` needed. With zero services this just
-      # applies the shared network + cluster + ALB.
-      - name: Terraform apply (full, with the pushed image tag)
+      # --- Full apply, BASE then EDGE (PRD platform/0006 §3/§6) -----------
+      # BASE first: network + cluster + execution role + ALB SG + every
+      # service's DynamoDB table (module.<name>_table). Near-no-op except
+      # when a new service's table lands. Free, permanent, never destroyed.
+      - name: Terraform apply (app-base, full)
+        working-directory: terraform/app-base
+        run: terraform apply -auto-approve
+
+      # EDGE second, now that BASE's outputs (vpc/subnets/cluster/execution
+      # role/ALB SG) are guaranteed current for EDGE's terraform_remote_state
+      # read: the shared ALB + listener, and every service's task def, now
+      # pointed at the just-pushed image tag. Terraform registering a new
+      # task def revision is what triggers ECS's rolling deploy — no
+      # separate `aws ecs update-service` needed. With zero services this
+      # just applies the ALB with no services behind it.
+      - name: Terraform apply (app-edge, full)
+        working-directory: terraform/app-edge
         run: terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
 
       # --- Wait for every service's rollout to actually go healthy --------
       # ECS brings up the new task set and health-checks it behind the ALB
       # before draining the old one; a failed health check leaves the last
       # good task definition serving and this wait times out / fails the
-      # job, so a bad deploy never reports green.
+      # job, so a bad deploy never reports green. The cluster lives in
+      # app-base (BASE owns the ECS cluster).
       - name: Wait for each ECS service to reach steady state
         run: |
           set -euo pipefail
-          CLUSTER=$(terraform output -raw ecs_cluster_id)
+          CLUSTER=$(terraform -chdir=terraform/app-base output -raw cluster_id)
           for name in $SERVICES; do
             echo "::group::wait for soa-$name"
             aws ecs wait services-stable --cluster "$CLUSTER" --services "soa-$name"

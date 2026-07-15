@@ -23,14 +23,15 @@ Ask, one at a time, and recommend a default for each:
 ## Step 2 — Derive the infrastructure (you, silently)
 
 From the answers, derive (per the [service contract](../rules/service-contract.md)):
-- **DynamoDB table:** `module "<name>_table"`, hash key from step 3 (usually `id`).
-- **ALB route:** `/<name>*` (or the resource noun), a **unique listener rule priority** (read `terraform/app/main.tf` for the highest existing priority and add 10; start at 100).
-- **Env var:** `<NAME>_TABLE` (upper snake).
+- **DynamoDB table:** `module "<name>_table"` (goes in **`terraform/app-base/`** — tables are permanent), hash key from step 3 (usually `id`).
+- **ECS service:** `module "<name>_service"` (goes in **`terraform/app-edge/`** — the destroyable billable layer).
+- **ALB route:** `/<name>*` (or the resource noun), a **unique listener rule priority** (read `terraform/app-edge/main.tf` for the highest existing priority and add 10; start at 100).
+- **Env var:** `<NAME>_TABLE` (upper snake), injected with the conventional table name `"<name_prefix>-<name>"`.
 - **Port:** 3000.
 
 ## Step 3 — Generate the per-service PRD (then STOP)
 
-Create `docs/action_plan/<name>/0001-service-scaffold.md` from [`docs/action_plan/_template.md`](../../docs/action_plan/_template.md): the **app spec** (entity, routes) and the **auto-derived infra** (table, route, env var, the two module blocks), success criteria (`/health` 200, the routes round-trip through DynamoDB), and the standard PR→CI→CD flow. Add its line to `docs/action_plan/README.md` under a `<name>/` group.
+Create `docs/action_plan/<name>/0001-service-scaffold.md` from [`docs/action_plan/_template.md`](../../docs/action_plan/_template.md): the **app spec** (entity, routes) and the **auto-derived infra** (table block in `app-base/`, service block in `app-edge/`, route, env var), success criteria (`/health` 200, the routes round-trip through DynamoDB), and the standard PR→CI→CD flow. Note in the PRD that deployment is **fully self-serve** — on merge, CD applies `app-base` (creates the table) then `app-edge` (deploys the service) with **no manual `terraform` step**; the pipeline may create the table but is denied `dynamodb:DeleteTable`, so it can never delete data. Add its line to `docs/action_plan/README.md` under a `<name>/` group.
 
 **Present it and wait for the user to approve.** Do not proceed to Step 4 until they confirm.
 
@@ -38,36 +39,40 @@ Create `docs/action_plan/<name>/0001-service-scaffold.md` from [`docs/action_pla
 
 1. **Copy** `services/_template/` → `services/<name>/`, then replace the placeholder tokens throughout: `__SERVICE_NAME__` → `<name>`, `__RESOURCE__` → the route noun, `__TABLE_ENV__` → `<NAME>_TABLE`.
 2. **`app-engineer`:** implement the routes from the PRD in `services/<name>/src/` (keep `/health` DB-free), add tests. Add the service to `docker-compose.yml` for local dev.
-3. **`terraform-engineer`:** add to `terraform/app/main.tf`, following the pattern documented in [`docs/operations/adding-a-service.md`](../../docs/operations/adding-a-service.md) and the `data` / `ecs-service` module interfaces:
+3. **`terraform-engineer`:** add **two** blocks in **two** configs, following the pattern in [`docs/operations/adding-a-service.md`](../../docs/operations/adding-a-service.md), [ADR 0003](../../docs/architecture/decisions/0003-base-edge-split.md), and the canonical example already wired in `terraform/app-edge/main.tf`:
+
+   **a) The table — in `terraform/app-base/main.tf`:**
    ```hcl
    module "<name>_table" {
-     source      = "./modules/data"
+     source      = "../modules/data"      # match the modules path used by the split
      name_prefix = var.name_prefix
      name        = "<name>"
      hash_key    = "id"
    }
+   ```
+   **b) The service — in `terraform/app-edge/main.tf`** (foundation values come from BASE via the `local.*` aliases already defined there from `terraform_remote_state`; the table is scoped by a constructed ARN string, not a cross-module ref):
+   ```hcl
    module "<name>_service" {
-     source             = "./modules/ecs-service"
+     source             = "../modules/ecs-service"
      name_prefix        = var.name_prefix
      region             = var.region
      name               = "<name>"
-     route              = "/<name>*"
-     priority           = <next unique priority>   # e.g. 100, then 110, 120, …
      port               = 3000
      image_tag          = var.image_tag
-     table_arns         = [module.<name>_table.arn]
-     env                = { <NAME>_TABLE = module.<name>_table.name }
-     vpc_id             = module.network.vpc_id
-     public_subnet_ids  = module.network.public_subnet_ids
-     cluster_id         = module.cluster.cluster_id
-     alb_sg_id          = module.cluster.alb_sg_id
-     listener_arn       = module.cluster.listener_arn
-     execution_role_arn = module.cluster.execution_role_arn
+     route              = "/<name>*"
+     priority           = <next unique priority>   # e.g. 100, then 110, 120, …
+     env                = { <NAME>_TABLE = "${var.name_prefix}-<name>" }
+     table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-<name>"]
+     vpc_id             = local.vpc_id
+     public_subnet_ids  = local.public_subnet_ids
+     cluster_id         = local.cluster_id
+     alb_sg_id          = local.alb_sg_id
+     listener_arn       = module.alb.listener_arn
+     execution_role_arn = local.execution_role_arn
      boundary_arn       = local.boundary_arn
    }
    ```
-   (Required module inputs: `name_prefix`, `region`, `name`, `route`, `priority`, `port`, `image_tag`, `vpc_id`, `public_subnet_ids`, `cluster_id`, `alb_sg_id`, `listener_arn`, `execution_role_arn`, `boundary_arn`. `cpu`/`memory`/`health_check_path`/`table_arns`/`env`/`desired_count` have sensible defaults.)
-   Run `terraform fmt` + `validate`.
+   This mirrors the commented `example_service` seam already in `terraform/app-edge/main.tf` — that file is the source of truth for the module interface, so copy its exact shape. Run `terraform -chdir=terraform/app-base fmt`/`validate` and `terraform -chdir=terraform/app-edge fmt`/`validate`.
 4. **`infra-reviewer`:** confirm the task role carries the boundary + is table-scoped, the listener priority is unique, no billable surprises.
 
 ## Step 5 — Open a PR

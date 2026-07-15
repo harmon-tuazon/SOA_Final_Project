@@ -6,13 +6,8 @@ variable "name_prefix" {
 }
 
 variable "vpc_id" {
-  description = "ID of the VPC the cluster's ALB and tasks run in."
+  description = "ID of the VPC the cluster's ALB security group and tasks run in."
   type        = string
-}
-
-variable "public_subnet_ids" {
-  description = "IDs of the public subnets the ALB is placed in."
-  type        = list(string)
 }
 
 variable "boundary_arn" {

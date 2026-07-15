@@ -1,6 +1,6 @@
 # Architecture Overview
 
-How the system is shaped, starting from the network every workload runs in. This grows as services land — today it covers the network foundation ([PRD platform/0003](../action_plan/platform/0003-network.md)) and the compute layer ([PRD platform/0004](../action_plan/platform/0004-ecs-alb.md)).
+How the system is shaped, starting from the network every workload runs in. This grows as services land — today it covers the network foundation ([PRD platform/0003](../action_plan/platform/0003-network.md)), the compute layer ([PRD platform/0004](../action_plan/platform/0004-ecs-alb.md)), and the permanent/destroyable split described below ([PRD platform/0006](../action_plan/platform/0006-base-edge-split.md), [ADR 0003](decisions/0003-base-edge-split.md)).
 
 ## Network
 
@@ -13,7 +13,7 @@ One VPC, spread across **two public subnets in two Availability Zones**, with no
 
 ECS services and the shared ALB (see [ADR 0001](decisions/0001-platform-and-compute-architecture.md), and Compute below) run directly in these public subnets, reachable only through security groups scoped at the resource that needs exposure (e.g. only the ALB open to the internet; tasks reachable only from the ALB).
 
-**Concrete values (CIDR, subnet count, AZ names) live in Terraform, not here** — see [`terraform/app/modules/network/`](../../terraform/app/modules/network/) for the resource definitions and [`terraform/app/main.tf`](../../terraform/app/main.tf) for how AZs are selected. Do not restate CIDRs/AZ names in prose; they can change without this doc needing an edit.
+**Concrete values (CIDR, subnet count, AZ names) live in Terraform, not here** — see [`terraform/modules/network/`](../../terraform/modules/network/) for the resource definitions and [`terraform/app-base/main.tf`](../../terraform/app-base/main.tf) for how AZs are selected. Do not restate CIDRs/AZ names in prose; they can change without this doc needing an edit.
 
 ## Compute
 
@@ -21,18 +21,30 @@ Synchronous microservices run as **ECS Fargate** tasks in the public subnets abo
 
 Each service gets its **own DynamoDB table(s)** — polyglot persistence, no shared database between services — and its **own IAM task role**, scoped to only its own table(s) and carrying the shared `soa-boundary`. A single **shared ECS task execution role** (image pull + log write only) is reused across every service, since that part is never service-specific. Task security groups only allow the app port in from the ALB's security group, so nothing reaches a task except through the load balancer.
 
-This is built as a **paved-road module pattern**: a service is one `data` module block (its table) + one `ecs-service` module block (its ECR repo, task role, target group, listener rule, task definition, ECS service, autoscaling) in `terraform/app/main.tf`, on top of the shared `ecs-cluster` module (cluster + ALB, created once). The `items` service ([`services/items/`](../../services/items/)) is the reference instance proving this pattern end-to-end. See [operations/compute-layer.md](../operations/compute-layer.md) for how the cluster/roles/pipeline work, and [operations/adding-a-service.md](../operations/adding-a-service.md) for the recipe to add another service — concrete resource shapes and inputs live in [`terraform/app/modules/ecs-cluster/`](../../terraform/app/modules/ecs-cluster/), [`terraform/app/modules/ecs-service/`](../../terraform/app/modules/ecs-service/), and [`terraform/app/modules/data/`](../../terraform/app/modules/data/), not restated here.
+This is built as a **paved-road module pattern**: a service is one `data` module block (its table) + one `ecs-service` module block (its ECR repo, task role, target group, listener rule, task definition, ECS service, autoscaling), on top of the shared `ecs-cluster` module (cluster + execution role + ALB security group) and `alb` module (the ALB + listener itself). As of [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) / [ADR 0003](decisions/0003-base-edge-split.md), the two module blocks for a given service **do not live in the same config** — see "Where this lives in Terraform" below. The `items` service ([`services/items/`](../../services/items/)) is the reference instance proving this pattern end-to-end. See [operations/compute-layer.md](../operations/compute-layer.md) for how the cluster/roles/pipeline work, and [operations/adding-a-service.md](../operations/adding-a-service.md) for the recipe to add another service — concrete resource shapes and inputs live in [`terraform/modules/ecs-cluster/`](../../terraform/modules/ecs-cluster/), [`terraform/modules/alb/`](../../terraform/modules/alb/), [`terraform/modules/ecs-service/`](../../terraform/modules/ecs-service/), and [`terraform/modules/data/`](../../terraform/modules/data/), not restated here.
+
+## No hardcoded endpoints (project-wide convention)
+
+Because the ALB is recreated on every teardown/spin-up cycle (see "Where this lives in Terraform" below), its DNS name is not stable across sessions. Every consumer — the future React frontend, and any service-to-service call — **reads the API base URL from config/env, never a literal ALB DNS name, IP, or endpoint in source**. This is a binding rule in [`service-contract.md`](../../.claude/rules/service-contract.md)'s application contract, enforced by a CI-visible grep for `elb.amazonaws.com` in `services/`/`functions/`. It also makes a future stable domain (Route 53 custom domain, deferred — see [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §3 out-of-scope) a one-value config change rather than a source change once it lands.
 
 ## Where this lives in Terraform
 
-Per [ADR 0002](decisions/0002-terraform-configuration-topology.md), both the network and the compute layer are provisioned in `terraform/app/` — the billable, pipeline-applied, routinely-`terraform destroy`ed config — not the human-applied identity foundation in `terraform/` root. The network itself is free (no NAT); the ALB and each Fargate task are the only billable resources in this config — see [PRD platform/0003](../action_plan/platform/0003-network.md) §5 and [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) §5 for the resource-by-resource cost breakdowns, and [operations/compute-layer.md](../operations/compute-layer.md) §7 for teardown.
+Per [ADR 0002](decisions/0002-terraform-configuration-topology.md) and refined by [ADR 0003](decisions/0003-base-edge-split.md), the network and compute layer are now split across **two** billable, pipeline-applied configs by lifecycle — not the single `terraform/app/` config ADR 0002 originally described (retired):
+
+- **`terraform/app-base/`** — the network, the ECS cluster, the shared execution role, the ALB security group, and **every service's DynamoDB table**. Free, permanent, never destroyed.
+- **`terraform/app-edge/`** — the ALB + HTTP listener, and every service's `ecs-service` module (compute). Destroyable, billable (~$16/mo ALB + Fargate task cost while running); this is what routine `terraform destroy` targets.
+
+Neither config is the human-applied identity foundation in `terraform/` root. See [PRD platform/0003](../action_plan/platform/0003-network.md) §5 and [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) §5 for the original resource-by-resource cost breakdowns, [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §5 for the split's cost table, and [operations/cost-lifecycle.md](../operations/cost-lifecycle.md) for the teardown/spin-up procedure.
 
 ## Related docs
 
 - [ADR 0001 — Platform & Compute Architecture](decisions/0001-platform-and-compute-architecture.md) — why ECS/Fargate + public subnets over EKS/private networking.
-- [ADR 0002 — Terraform Configuration Topology](decisions/0002-terraform-configuration-topology.md) — why the network and compute layer live in a separate, destroyable `terraform/app/` config.
+- [ADR 0002 — Terraform Configuration Topology](decisions/0002-terraform-configuration-topology.md) — why the network and compute layer live in a separate, destroyable config, apart from the identity foundation.
+- [ADR 0003 — Base/Edge Split](decisions/0003-base-edge-split.md) — why that billable config is itself split into a permanent `app-base` and a destroyable `app-edge`.
 - [PRD platform/0003 — Network Foundation](../action_plan/platform/0003-network.md) — the plan and outcome for the network resources described above.
 - [PRD platform/0004 — ECS + ALB](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the compute layer and golden-path modules.
+- [PRD platform/0006 — Base/Edge Split](../action_plan/platform/0006-base-edge-split.md) — the plan and outcome for the base/edge split.
 - [operations/compute-layer.md](../operations/compute-layer.md) — how the cluster, ALB, IAM roles, and pipeline deploy work.
 - [operations/adding-a-service.md](../operations/adding-a-service.md) — the recipe for wiring a new service onto the compute layer.
-- [operations/cicd-pipeline.md](../operations/cicd-pipeline.md) — how the pipeline applies `terraform/app/`.
+- [operations/cicd-pipeline.md](../operations/cicd-pipeline.md) — how the pipeline applies `app-base` and `app-edge`.
+- [operations/cost-lifecycle.md](../operations/cost-lifecycle.md) — the teardown/spin-up procedure.
