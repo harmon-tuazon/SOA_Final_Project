@@ -4,7 +4,7 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-15
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-15 (user)
@@ -127,4 +127,26 @@ Billable/destructive commands named: the transient `app-edge` apply/destroy for 
 
 ## Outcome
 
-_Filled after execution._
+Executed as planned and proven end-to-end. Shipped in PR #12 (`Scaffold React SPA + S3 static hosting`), merged to `main`.
+
+**Delivered:**
+- `frontend/` — Vite + React + TypeScript SPA: React Router, React Query, the runtime-`config.json` + typed `apiFetch` layer, an auth stub (`AuthContext`/`ProtectedRoute`, `// TODO(cognito)` markers), one worked `products` example feature, and a README with the add-a-feature recipe. Builds + typechecks clean.
+- `terraform/modules/frontend/` — public-read S3 website bucket (`soa-frontend-<acct>`, index+error = `index.html`), wired into `app-base` with `frontend_bucket_name`/`frontend_website_endpoint` outputs. `soa-deployer` gained S3 scoped to `soa-frontend-*` only — no `s3:DeleteBucket`, plus an explicit `DenyFrontendBucketDeletion` backstop.
+- `frontend-cd.yml` (build → `s3 sync --exclude config.json` → `index.html` no-cache), `frontend-ci.yml` (PR build/typecheck), and the `config.json` refresh step in backend `cd.yml`. ADR 0004, `adding-a-frontend-feature.md`, overview/cost/pipeline doc updates.
+
+**Verification (all criteria met):**
+- CI green on PR #12: Terraform fmt/validate/plan on both configs **and** the new Frontend build/typecheck check.
+- Root IAM apply → `0 add, 1 change`. `app-base` apply → **5 added** (bucket + ownership controls + website config + public-access-block + policy), all free.
+- Frontend CD **succeeded** (built + synced the SPA); backend CD **succeeded** (applied base + edge, then the **"Refresh frontend config.json"** step wrote the live ALB DNS).
+- Live checks against the S3 website endpoint: `GET /` → **200** (SPA loads), `GET /config.json` → **`{"apiBaseUrl":"http://soa-alb-…"}`** (the real ALB DNS, proving the dynamic-URL plumbing), `GET /products` → serves `index.html` (client-side routing survives refresh; 404 status is the documented S3 quirk). Criteria #1–7.
+- After `app-edge destroy`: **0 ALBs** (~$0), SPA **still loads (200)**, frontend bucket present, `app-base plan` → **"No changes"**. Criterion #8 — frontend survives the edge teardown at ~$0.
+
+**Deviations (all improvements / bootstrap, no scope/cost change):**
+- **Made the no-hardcoded-endpoint rule a real CI check.** infra-reviewer found the docs claimed "CI-enforced" but no grep existed. Added a real grep guard to `ci.yml` (`services/`+`functions/`) and `frontend-ci.yml` (`frontend/src`) so the claim is now true.
+- **Added a CORS contract item** (`service-contract.md` app-contract item 7) per infra-reviewer's forward-flag: the first browser-facing service must return CORS headers, or the SPA's cross-origin `fetch` (S3 origin → ALB origin) is browser-blocked even when the ALB is reachable. Captured in ADR 0004 too.
+- **One-time bootstrap:** `app-base` (with the new frontend module) was applied locally before the PR so the frontend pipeline could resolve the bucket output on merge without a race — consistent with base being human-first-applied.
+- Minor (flagged, not fixed): `vite.config.ts` `build.target: es2022` (for top-level `await loadConfig()`); one moderate `npm audit` finding in `vite@5`'s dev server only (not the S3-hosted output).
+
+**Follow-ups:** the deferred **HTTPS + CloudFront + custom domain + Cognito** PRD (the runtime-`config.json` design makes it an infra change, not a frontend rewrite); **CORS** config lands with the first `/new-service`; the first real domain service exercises the actual API round-trip (today the example shows a graceful "backend unavailable" state).
+
+**Steady state now:** the SPA is **always-on in `app-base` at ~$0** with a stable URL (`soa-frontend-<acct>.s3-website-us-east-1.amazonaws.com`), reachable even between sessions; only the edge (ALB) cycles up/down. See [ADR 0004](../../architecture/decisions/0004-frontend-hosting.md) and [cost-lifecycle.md](../../operations/cost-lifecycle.md).
