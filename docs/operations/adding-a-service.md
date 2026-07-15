@@ -1,6 +1,6 @@
 # Adding a Service
 
-How a new ECS Fargate service gets wired onto the shared compute layer: a service contract every service follows, plus two Terraform blocks in `terraform/app/main.tf`. There are two paths to get there — the automated `/new-service` command (recommended) and a manual copy-from-template recipe — both produce the same shape and are bound by the same contract.
+How a new ECS Fargate service gets wired onto the shared compute layer: a service contract every service follows, plus **two Terraform blocks in two configs** — a table block in `terraform/app-base/main.tf` (permanent) and a service block in `terraform/app-edge/main.tf` (destroyable), per [ADR 0003](../architecture/decisions/0003-base-edge-split.md). There are two paths to get there — the automated `/new-service` command (recommended) and a manual copy-from-template recipe — both produce the same shape and are bound by the same contract.
 
 Worked skeleton: [`services/_template/`](../../services/_template/) (never deployed — copied). Background on what the modules do and how the pipeline deploys them: [compute-layer.md](compute-layer.md). The binding contract both paths must satisfy: [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md).
 
@@ -8,7 +8,7 @@ Worked skeleton: [`services/_template/`](../../services/_template/) (never deplo
 
 Every service under `services/<name>/` follows the same shape — the full, binding rule is [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md); summarized here:
 
-- **Reads all config from the environment** — table name, port, etc. — never hardcoded and never read from a committed file. Secrets (if a service ever needs one) come from SSM/Secrets Manager at runtime, not from Terraform `env` vars (see `modules/ecs-service` `env` input — plain, non-secret values only).
+- **Reads all config from the environment** — table name, port, etc. — never hardcoded and never read from a committed file. **This includes API base URLs**: never hardcode the ALB's DNS name — it changes every time `app-edge` is torn down and recreated (see [ADR 0003](../architecture/decisions/0003-base-edge-split.md)) — read it from config/env instead. Secrets (if a service ever needs one) come from SSM/Secrets Manager at runtime, not from Terraform `env` vars (see `modules/ecs-service` `env` input — plain, non-secret values only).
 - **Exposes `GET /health`**, fast and free of any DynamoDB (or other dependency) call, returning `200` as long as the process is up. This is the ALB target group's health check, not a general readiness check — see [`services/_template/src/app.js`](../../services/_template/src/app.js).
 - **Standard Dockerfile shape** — small base image (`node:20-alpine` in the template), multi-stage/`npm ci --omit=dev` for a lean image, runs as a **non-root user** (`USER node`), exposes the app's port. See [`services/_template/Dockerfile`](../../services/_template/Dockerfile).
 - **Own DynamoDB table(s) only** — no shared database between services (polyglot persistence, per ADR 0001). The service reads its table name from an env var the Terraform wiring supplies (e.g. `<NAME>_TABLE`), never a hardcoded table name.
@@ -20,28 +20,32 @@ Every service under `services/<name>/` follows the same shape — the full, bind
 
 ### Path A — `/new-service` (recommended)
 
-[`.claude/commands/new-service.md`](../../.claude/commands/new-service.md) automates the whole flow: an app-level interview (name, purpose, entity/fields, routes, async needs) → it derives the infrastructure (table hash key, ALB route, listener priority, env var) → generates a per-service PRD under `docs/action_plan/<name>/0001-service-scaffold.md` and **stops for approval** → on approval, scaffolds `services/<name>/` from `_template`, adds the two Terraform blocks below, runs `fmt`/`validate`/`npm test`, and opens a PR. It never runs `terraform apply`, `aws`, or `docker` deploy commands directly — the pipeline deploys after human review, per the [action-plan rule](../../.claude/rules/action-plan.md).
+[`.claude/commands/new-service.md`](../../.claude/commands/new-service.md) automates the whole flow: an app-level interview (name, purpose, entity/fields, routes, async needs) → it derives the infrastructure (table hash key, ALB route, listener priority, env var) → generates a per-service PRD under `docs/action_plan/<name>/0001-service-scaffold.md` and **stops for approval** → on approval, scaffolds `services/<name>/` from `_template`, adds the two Terraform blocks below (one in each config), runs `fmt`/`validate`/`npm test`, and opens a PR. It never runs `terraform apply`, `aws`, or `docker` deploy commands directly — the pipeline deploys after human review, per the [action-plan rule](../../.claude/rules/action-plan.md).
 
 Run it as `/new-service <name>` (name optional — it will ask).
 
 ### Path B — manual recipe
 
-Useful when scaffolding by hand or reviewing what `/new-service` produces:
+Useful when scaffolding by hand or reviewing what `/new-service` produces. Per [ADR 0003](../architecture/decisions/0003-base-edge-split.md), the two Terraform blocks now go into **two different configs**:
 
 1. **Copy the skeleton:** `services/_template/` → `services/<name>/`, then replace the placeholder tokens (`__SERVICE_NAME__`, `__RESOURCE__`, `__TABLE_ENV__`) throughout — see [`services/_template/README.md`](../../services/_template/README.md) for the token table.
-2. **Add the two Terraform blocks** to [`terraform/app/main.tf`](../../terraform/app/main.tf), following the pattern below (also documented in [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md)):
+2. **Add the table block** to [`terraform/app-base/main.tf`](../../terraform/app-base/main.tf) — this is the permanent half; the table (and its data) survives every `app-edge` teardown:
 
 ```hcl
 module "<name>_table" {
-  source = "./modules/data"
+  source = "../modules/data"
 
   name_prefix = var.name_prefix
   name        = "<name>"
   hash_key    = "id"          # or whatever the service's partition key is
 }
+```
 
+3. **Add the service block** to [`terraform/app-edge/main.tf`](../../terraform/app-edge/main.tf) — the destroyable half. Foundation values (`vpc_id`, `public_subnet_ids`, `cluster_id`, `execution_role_arn`, `alb_sg_id`) come from `app-base` via the `local.*` aliases already defined there from `terraform_remote_state` (see `app-edge/main.tf:19-46`) — this config never reads `module.network`/`module.cluster` directly, since those modules live in `app-base`. The table is scoped by a **constructed ARN string**, never a cross-module reference (`app-edge` cannot see `app-base`'s `module.<name>_table.arn` — only its exported outputs):
+
+```hcl
 module "<name>_service" {
-  source = "./modules/ecs-service"
+  source = "../modules/ecs-service"
 
   name_prefix = var.name_prefix
   region      = var.region
@@ -51,30 +55,32 @@ module "<name>_service" {
   priority    = 100            # must be unique across every service's listener rule
   image_tag   = var.image_tag
 
-  table_arns = [module.<name>_table.arn]
+  table_arns = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-<name>"]
   env = {
-    <NAME>_TABLE = module.<name>_table.name
+    <NAME>_TABLE = "${var.name_prefix}-<name>"
   }
 
-  vpc_id             = module.network.vpc_id
-  public_subnet_ids  = module.network.public_subnet_ids
-  cluster_id         = module.cluster.cluster_id
-  alb_sg_id          = module.cluster.alb_sg_id
-  listener_arn       = module.cluster.listener_arn
-  execution_role_arn = module.cluster.execution_role_arn
+  vpc_id             = local.vpc_id
+  public_subnet_ids  = local.public_subnet_ids
+  cluster_id         = local.cluster_id
+  alb_sg_id          = local.alb_sg_id
+  listener_arn       = module.alb.listener_arn
+  execution_role_arn = local.execution_role_arn
   boundary_arn       = local.boundary_arn
 }
 ```
 
-Inputs a new service actually sets (everything else is either a shared default or wired from the cluster/network modules, per [`modules/ecs-service/variables.tf`](../../terraform/app/modules/ecs-service/variables.tf)):
+This mirrors the commented `example_service` seam already in [`terraform/app-edge/main.tf`](../../terraform/app-edge/main.tf) — that file is the source of truth for the exact shape; copy it rather than retyping from this doc. Run `terraform -chdir=terraform/app-base fmt`/`validate` and `terraform -chdir=terraform/app-edge fmt`/`validate` after adding both blocks.
+
+Inputs a new service actually sets (everything else is either a shared default or wired via the `local.*`/`module.alb` foundation values, per [`modules/ecs-service/variables.tf`](../../terraform/modules/ecs-service/variables.tf)):
 
 | Input | What it controls |
 | --- | --- |
-| `name` | Names the ECR repo, log group, roles, security group, container — must be unique (also `soa-<name>` for AWS resource names, per the [service contract](../../.claude/rules/service-contract.md)) |
+| `name` | Names the ECR repo, log group, roles, security group, container — must be unique (also `soa-<name>` for AWS resource names, per the [service contract](../../.claude/rules/service-contract.md)); must match the `name` used in the matching `app-base` table block |
 | `port` | The container's listening port; also what the task SG opens from the ALB SG |
 | `route` | The listener-rule path pattern forwarded to this service (e.g. `/orders*`) |
-| `priority` | Listener-rule evaluation order — must be unique across every service on the shared listener (increment from the highest existing: 100, 110, 120, …) |
-| `table_arns` | Which DynamoDB table(s) the task role is scoped to (omit/empty if the service has none) |
+| `priority` | Listener-rule evaluation order — must be unique across every service on the shared listener (increment from the highest existing in `app-edge/main.tf`: 100, 110, 120, …) |
+| `table_arns` | The constructed ARN string(s) of the DynamoDB table(s) the task role is scoped to (omit/empty if the service has none) — must match the table `app-base`'s `data` module actually creates (`${var.name_prefix}-<name>`) |
 | `env` | Plain (non-secret) environment variables the container reads at startup |
 
 Everything else — `cpu`/`memory` (default 256/512), `health_check_path` (default `/health`), `desired_count` (default 1, then owned by autoscaling) — has a sane default a first service doesn't need to touch.
@@ -83,12 +89,12 @@ No per-service Terraform output is required: the pipeline derives each image's r
 
 ## 3. PR -> CI -> CD flow
 
-Same flow as any other change to `terraform/app/` or `services/**` (see [cicd-pipeline.md §4](cicd-pipeline.md#4-developer-flow)), now generalized to any number of services:
+Same flow as any other change to the app configs or `services/**` (see [cicd-pipeline.md §4](cicd-pipeline.md#4-developer-flow)), now spanning two configs and generalized to any number of services:
 
-1. Branch off `main`, add `services/<name>/` and the two module blocks above (or let `/new-service` do it after PRD approval).
-2. Open a PR — `ci.yml` discovers every directory under `services/*` except `_template`, builds each one's Docker image, and plans `terraform/app/` as `soa-ci-plan`. Branch protection requires this to pass before merge.
-3. Merge — `cd.yml` runs as `soa-deployer`: discovers the same `services/*` set, targeted-applies each service's ECR repo -> builds + pushes each image as `soa-<name>:$GITHUB_SHA` -> one full apply (creates/updates every discovered service's task def, ECS service, target group, listener rule, task role, autoscaling) -> `aws ecs wait services-stable` per service. With zero services present, CD just applies the shared network + cluster + ALB.
-4. Verify: `curl http://<alb-dns-name>/<route>` (get the ALB DNS name from `terraform output alb_dns_name` in `terraform/app/`) — never hardcode the DNS name in a doc or script.
+1. Branch off `main`, add `services/<name>/`, the table block in `terraform/app-base/main.tf`, and the service block in `terraform/app-edge/main.tf` (or let `/new-service` do it after PRD approval).
+2. Open a PR — `ci.yml` discovers every directory under `services/*` except `_template`, builds each one's Docker image, and (per PRD platform/0006's intended design — see the gap noted in [cicd-pipeline.md](cicd-pipeline.md)) plans **both** `app-base` and `app-edge` as `soa-ci-plan`. Branch protection requires this to pass before merge.
+3. Merge — `cd.yml` runs as `soa-deployer`: applies **`app-base`** (creates the new service's table, with no human step — the pipeline is scoped to create/update `soa-*` tables but explicitly denied `DeleteTable`, per [ADR 0003](../architecture/decisions/0003-base-edge-split.md)), then, against **`app-edge`**, discovers the same `services/*` set, targeted-applies each service's ECR repo -> builds + pushes each image as `soa-<name>:$GITHUB_SHA` -> one full apply (creates/updates every discovered service's task def, ECS service, target group, listener rule, task role, autoscaling) -> `aws ecs wait services-stable` per service. With zero services present, CD just applies the shared network/cluster (`app-base`) and ALB (`app-edge`).
+4. Verify: `curl http://<alb-dns-name>/<route>` (get the ALB DNS name from `terraform -chdir=terraform/app-edge output alb_dns_name`) — never hardcode the DNS name in a doc, script, or the frontend/service code; it changes every `app-edge` teardown/recreate cycle.
 
 If the new resource types the service needs (a new AWS service integration, not just another ECS service) hit a `soa-deployer` `AccessDenied`, that's a deployer-permission gap fixed by a human apply against the root identity config — see [compute-layer.md §5](compute-layer.md#5-deployer-permissions-grows-with-new-resource-types).
 
@@ -98,5 +104,8 @@ If the new resource types the service needs (a new AWS service integration, not 
 - [`.claude/commands/new-service.md`](../../.claude/commands/new-service.md) — the automated interview → PRD → scaffold → PR command.
 - [compute-layer.md](compute-layer.md) — what the cluster/ALB/modules do and why, in depth.
 - [cicd-pipeline.md](cicd-pipeline.md) — the workflows this flow runs through.
+- [cost-lifecycle.md](cost-lifecycle.md) — how a service's table survives teardown while its compute doesn't.
+- [ADR 0003](../architecture/decisions/0003-base-edge-split.md) — why a service is declared across two configs, and the self-serve/deny-delete table posture.
 - [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) — the PRD that built the compute layer and modules this recipe wires into.
 - [PRD platform/0005](../action_plan/platform/0005-service-factory.md) — the PRD that extracted `_template`, wrote the service contract, built `/new-service`, and generalized the pipeline over `services/*`.
+- [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) — the PRD that split the recipe across `app-base`/`app-edge` and made tables self-serve.

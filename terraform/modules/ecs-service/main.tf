@@ -1,7 +1,9 @@
 # ecs-service module: the reusable "paved road" that turns a container image
 # + a DynamoDB table into a running, load-balanced ECS Fargate service behind
-# the shared ALB. A second service is one `data` + one `ecs-service` block in
-# the root config (PRD platform/0004 §3/§6).
+# the shared ALB. A second service is one `data` block in app-base + one
+# `ecs-service` block in app-edge (PRD platform/0004 §3/§6, split per PRD
+# platform/0006). Its own `table_arns` are constructed as strings by the
+# app-edge root (never a remote_state read) — see app-edge/main.tf.
 #
 # Per-service resources: ECR repo, CloudWatch log group, task role (scoped to
 # the service's own table(s), carrying the soa-boundary), task security group

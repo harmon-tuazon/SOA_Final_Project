@@ -2,7 +2,7 @@
 
 > Terraform is split into three separate configs/states — `bootstrap/` (state bucket), the root identity foundation, and `app/` (billable infra) — so that cost-saving teardown never destroys the permanent, free identities the pipeline depends on.
 
-- **Status:** Accepted
+- **Status:** Accepted — refined by [ADR 0003](0003-base-edge-split.md)
 - **Date:** 2026-07-11
 
 ## Context
@@ -35,8 +35,9 @@ The pipeline (`ci.yml` plan / `cd.yml` apply) targets **`terraform/app/`**. The 
 ## Current state / transition
 
 - `bootstrap/` and the root identity foundation **exist and are applied** (PRDs 0001 & 0002).
-- `terraform/app/` **now exists and is pipeline-applied** — created in [PRD platform/0003](../../action_plan/platform/0003-network.md) (the network foundation), which also **retargeted `ci.yml`/`cd.yml` from `terraform/` to `terraform/app/`**. The pipeline now plans/applies `terraform/app/`; the identity foundation is human-applied only.
+- `terraform/app/` **existed and was pipeline-applied** — created in [PRD platform/0003](../../action_plan/platform/0003-network.md) (the network foundation), which also **retargeted `ci.yml`/`cd.yml` from `terraform/` to `terraform/app/`**.
 - Moving the identity `.tf` files into a `terraform/foundation/` subdirectory (so `terraform/` has no loose root config) was considered but deferred — it would require state migration for no functional gain; the root config stays as the identity foundation.
+- **Refined by [ADR 0003](0003-base-edge-split.md) (PRD platform/0006):** the single `terraform/app/` config described above has since been split into `terraform/app-base/` (permanent, free — network, cluster, execution role, ALB SG, tables) and `terraform/app-edge/` (destroyable, billable — ALB + per-service compute); `terraform/app/` itself is retired. The lifecycle-split *principle* recorded in this ADR (permanent identity vs. destroyable billable infra) is unchanged — ADR 0003 applies it one level deeper, inside what was the billable tier. Routine `terraform destroy` now targets `terraform/app-edge/` specifically, not a single `app/` config.
 
 ## Alternatives considered
 

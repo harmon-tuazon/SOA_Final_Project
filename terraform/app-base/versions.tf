@@ -1,4 +1,4 @@
-# Pins the Terraform CLI and provider versions for the app config.
+# Pins the Terraform CLI and provider versions for the app-base config.
 
 terraform {
   required_version = ">= 1.10"

@@ -1,0 +1,6 @@
+# Template for terraform.tfvars. Copy this file to terraform.tfvars
+# (gitignored — see .gitignore's *.tfvars rule) and fill in the real bucket
+# name, same value as backend.hcl's `bucket`. In CI this is instead supplied
+# as the TF_VAR_state_bucket environment/workflow variable — either works,
+# Terraform reads both.
+state_bucket = "soa-tfstate-<account_id>"

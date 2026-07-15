@@ -16,12 +16,16 @@
 # Native S3 locking (use_lockfile) requires Terraform >= 1.10 and needs no
 # separate DynamoDB lock table.
 #
-# This config uses a distinct state key ("app/") from the root identity
-# config ("platform/"), per ADR 0002 — separate lifecycles, separate state.
+# This config uses its own state key ("app-edge/"), distinct from the root
+# identity config ("platform/") and from app-base ("app-base/") — per ADR
+# 0002 and PRD platform/0006, each lifecycle gets its own state. app-edge is
+# the DESTROYABLE, billable half of what used to be the single "app/"
+# config: the ALB + HTTP listener, and every service's ecs-service module.
+# This is what `terraform destroy` targets between sessions.
 
 terraform {
   backend "s3" {
-    key          = "app/terraform.tfstate"
+    key          = "app-edge/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
     use_lockfile = true

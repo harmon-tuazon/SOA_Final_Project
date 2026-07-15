@@ -1,12 +1,19 @@
 # ecs-cluster module: the shared, cluster-wide compute resources created
-# once for the whole app — the ECS Fargate cluster, the single internet-
-# facing ALB (in the public subnets, per ADR 0001's no-NAT-gateway cost
-# trade-off), its security group, an HTTP :80 listener with a default
-# fixed-response 404 (real routes are added by ecs-service instances via
-# listener rules), and the ECS task execution role every service's task
-# definition shares (ECR pull + CloudWatch Logs write only — never the
-# app's own data-plane permissions, which live on each service's task
-# role instead).
+# once for the whole app and lived in app-base (PRD platform/0006 — the
+# free, permanent foundation) — the ECS Fargate cluster, its security group
+# for the ALB (referenced, not owned, by the ALB), and the ECS task
+# execution role every service's task definition shares (ECR pull +
+# CloudWatch Logs write only — never the app's own data-plane permissions,
+# which live on each service's task role instead).
+#
+# The ALB + HTTP listener themselves live in app-edge (the modules/alb/
+# module), NOT here: the ALB is the only billable resource in this whole
+# module tree, and app-base must stay 100% free/permanent (ADR 0002 /
+# platform/0006). The ALB security group stays here because it only
+# references the VPC (free) and is reused as-is by app-edge's ALB via
+# remote state — creating it in app-base means it survives an `app-edge
+# destroy` and doesn't need to be recreated (and re-authorized) every time
+# the edge comes back up.
 
 resource "aws_ecs_cluster" "this" {
   name = "${var.name_prefix}-cluster"
@@ -21,7 +28,9 @@ resource "aws_ecs_cluster" "this" {
 #
 # Inbound :80 from the internet (this is the public entry point for every
 # service behind the shared ALB); egress open so the ALB can reach tasks on
-# whatever port they listen on across the VPC.
+# whatever port they listen on across the VPC. Lives here (app-base) rather
+# than with the ALB itself (app-edge) so it persists across `app-edge`
+# teardown/recreate cycles.
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb"
   description = "Shared ALB security group: inbound HTTP from the internet, outbound to tasks."
@@ -45,42 +54,6 @@ resource "aws_security_group" "alb" {
 
   tags = {
     Name = "${var.name_prefix}-alb"
-  }
-}
-
-# --- Shared ALB --------------------------------------------------------------
-#
-# One ALB for the whole app (not one per service) — a deliberate cost trade
-# (ADR 0001). Internet-facing, sitting directly in the public subnets since
-# there's no NAT/private subnet split in this design.
-resource "aws_lb" "this" {
-  name               = "${var.name_prefix}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnet_ids
-
-  tags = {
-    Name = "${var.name_prefix}-alb"
-  }
-}
-
-# HTTP-only listener (no ACM/domain yet — see PRD platform/0004 §9). Default
-# action is a fixed 404 response; each ecs-service instance registers its own
-# path-based listener rule on this listener for its route.
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.this.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Not Found"
-      status_code  = "404"
-    }
   }
 }
 
