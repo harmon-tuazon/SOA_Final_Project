@@ -20,3 +20,10 @@ terraform.rc
 # name, so it's supplied locally/in CI via -backend-config and never
 # committed. backend.hcl.example (the placeholder template) IS committed.
 backend.hcl
+
+# Console-user real names (PRD platform/0007): already covered by the
+# blanket "*.tfvars"/"*.tfvars.json" ignores above, but named explicitly
+# here too since these usernames must never land in a committed file.
+# console-users.tfvars.example (the placeholder template) IS committed.
+console-users*.tfvars
+*.auto.tfvars

@@ -88,6 +88,8 @@ The root config (`terraform/`) is the project's **permanent identity foundation*
 
 **Do not `terraform destroy` the `terraform/` config for cost-saving teardown.** Billable infrastructure lives in separate configs/states — as of [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) / [ADR 0003](../architecture/decisions/0003-base-edge-split.md), split into the permanent, free `terraform/app-base/` and the destroyable, billable `terraform/app-edge/`. **`terraform/app-edge/` is the config you destroy between sessions** to return spend to ~$0 — see [cost-lifecycle.md](cost-lifecycle.md) — and destroying it never touches the identities here or `app-base`.
 
+This foundation also carries console-only IAM users for human sign-in (DynamoDB data users + one administrator) — see [console-access.md](console-access.md) for who they are and how to onboard one ([PRD platform/0007](../action_plan/platform/0007-dynamodb-console-users.md)).
+
 The **state bucket** (bootstrap) is likewise excluded; it only goes away as a final, manual step, after every other config is destroyed (e.g. after grading):
 
 ```bash

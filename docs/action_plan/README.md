@@ -15,6 +15,7 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | [0004 — ECS + ALB (compute + golden-path modules)](platform/0004-ecs-alb.md) | Done |
 | [0005 — Service Factory (template + contract + /new-service)](platform/0005-service-factory.md) | Done |
 | [0006 — Base/Edge Split (permanent free base + destroyable edge)](platform/0006-base-edge-split.md) | Done |
+| [0007 — IAM Console Users (DynamoDB least-privilege + 1 admin)](platform/0007-dynamodb-console-users.md) | Done |
 
 ### frontend/
 | PRD | Status |

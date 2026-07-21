@@ -1,0 +1,25 @@
+# Example tfvars for terraform/console-users.tf (PRD platform/0007).
+#
+# Copy this file to a gitignored one (e.g. console-users.auto.tfvars) and
+# fill in real usernames. This .example file is the only one committed —
+# real usernames must never appear in a tracked file.
+#
+#   cp console-users.tfvars.example console-users.auto.tfvars
+#   # edit console-users.auto.tfvars with real names
+#   terraform -chdir=terraform plan
+
+# Least-privilege DynamoDB console users (view/edit soa-* table data only).
+console_users = [
+  "user-one",
+  "user-two",
+]
+
+# Full-administrator ("same as owner") console user(s).
+admin_console_users = [
+  "admin-user",
+]
+
+# Name of the existing, pre-provisioned admin group carrying
+# AdministratorAccess. Defaults to "Admins" — override only if yours is
+# named differently.
+# admin_group_name = "Admins"
