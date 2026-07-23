@@ -25,4 +25,4 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 ### order/
 | PRD | Status |
 | --- | --- |
-| [0001 — Order Service Scaffold](order/0001-service-scaffold.md) | In Progress |
+| [0001 — Order Service Scaffold](order/0001-service-scaffold.md) | Done |

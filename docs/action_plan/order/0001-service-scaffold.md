@@ -4,9 +4,10 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
+- **Status:** Done <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
 - **Date:** 2026-07-22
 - **Approved:** 2026-07-22 by the repo owner
+- **Deployed:** 2026-07-22 — Infrastructure CD run #9 green (5m15s) on `main`
 - **Author:** Anjuuuzzz (with Claude Code)
 
 > Execution may only start once the user has confirmed **Approved**.
@@ -289,9 +290,13 @@ Plus the automatic gates: `ci.yml` discovers `services/order`, builds it, and pl
 
 Verified: `npm run typecheck` clean, `npm run build` succeeds (91 modules), `grep -rn "elb\.amazonaws\.com" frontend/src` empty, and no bare `fetch(` outside `lib/api.ts`. Every page handles loading / backend-unavailable / empty states, because **the order service is not deployed yet** — until the §5.1 handoff lands, these pages will render their "Backend unavailable" state, which is expected, not a bug.
 
-### Deviation from plan
+### Deviation from plan — Terraform dropped, then restored
 
-**All Terraform was dropped from this PRD mid-execution**, at the repo owner's direction: infrastructure is owned by a separate DevOps team. §3 and §7 were amended and re-confirmed before work continued, per the [action-plan rule](../../../.claude/rules/action-plan.md). The two required module blocks are specified verbatim in **§5.1** for handoff. `terraform/` was not modified — confirmed by `git status`.
+Terraform was **dropped mid-execution** at the repo owner's direction (infrastructure being owned by a separate DevOps team); §3 and §7 were amended and re-confirmed before work continued, and the blocks were specified in §5.1 for handoff instead.
+
+**That split broke CD, and the two halves were then re-joined.** PR #15 merged the application half alone. `cd.yml` discovers every directory under `services/*` and then builds/pushes `soa-<name>` to an ECR repo that only the `ecs-service` module creates — so with `services/order/` present and no `module.order_service`, the push had no repository to target. **Infrastructure CD run #8 failed in 49s**, before either config was applied, so no AWS resource was created or changed. PR #16 added the two §5.1 blocks and **CD run #9 went green in 5m15s**, completing the deploy.
+
+**Lesson, now binding on the rest of the team:** the paved road requires a service's code and its two module blocks to land in the **same PR** — as [adding-a-service.md §3](../../operations/adding-a-service.md) already states. Splitting them across PRs red-builds `main` for the gap. The team model was confirmed as "both halves in one PR" as a result; `product`, `login`, and `notification` should follow it. The two blocks are service *declarations* (calling shared modules), not infrastructure authoring — shared modules, the network, the cluster, and the identity config remain DevOps-owned.
 
 ### Success criteria status
 
@@ -300,8 +305,33 @@ Verified: `npm run typecheck` clean, `npm run build` succeeds (91 modules), `gre
 | §4.1 `npm test` incl. server-authoritative total | **Met** — 58/58 pass |
 | §4.2 non-root image | **Not verified** — Docker unavailable in the execution environment. The template `Dockerfile`'s `USER node` is unchanged, so it should hold, but it was not observed |
 | §4.3 no hardcoded endpoints | **Met** — grep clean over `src/` and `tests/` |
-| §4.4–§4.9 (Terraform validate/plan, boundary/table scoping, priority, deployed `curl` round-trip) | **Deferred** — depend on the DevOps handoff in §5.1 |
+| §4.4 `fmt`/`validate` both configs | **Met** — Infrastructure CI run #16 green on PR #16 |
+| §4.5 plan shows creates, 0 destroys | **Met** — CI #16 plan clean; CD #9 applied without replacing anything |
+| §4.6 priority 100 unique | **Met** — appears once in `app-edge/main.tf` |
+| §4.7 boundary + table-scoped role | **Met by construction** — [`ecs-service/main.tf:46`](../../../terraform/modules/ecs-service/main.tf) attaches `soa-boundary`; the customer-managed `soa-order-task` policy scopes to the constructed table ARN + `/index/*` only. Reviewed by reading the module, not by an `infra-reviewer` agent pass (that step was dropped with the §3 amendment) |
+| §4.8 `curl /orders` → 200 | **Not verified** — no `aws`/`terraform` CLI in the authoring environment to resolve the ALB DNS. CD's `aws ecs wait services-stable` passing is strong indirect evidence (the task went healthy behind the ALB), but the HTTP round-trip was not observed. **Owner to run the smoke test below.** |
+| §4.9 create → read → cancel round-trip | **Not verified** — same reason |
 | §4.10 index line | **Met** |
+
+### Smoke test still owed (§4.8–§4.9)
+
+Run once against the live environment to close these out:
+
+```bash
+ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/orders"          # expect 200
+
+ID=$(curl -s -XPOST "http://$ALB/orders" -H 'content-type: application/json' \
+  -d '{"customerId":"c1","items":[{"productId":"p1","name":"Widget","unitPrice":9.99,"qty":2}],
+       "shippingAddress":{"line1":"1 Demo St","city":"Toronto","postalCode":"M5V 2T6","country":"CA"}}' \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+curl -s "http://$ALB/orders/$ID"                                        # same order, total 19.98
+curl -s -XPOST "http://$ALB/orders/$ID/cancel"                          # 200, status CANCELLED
+curl -s -o /dev/null -w '%{http_code}\n' -XPOST "http://$ALB/orders/$ID/cancel"  # expect 409
+```
+
+Or simply open the SPA's **Your Orders** page and press "Place a demo order" — same path, through the browser.
 
 ### Review defects — found, then fixed on request
 
