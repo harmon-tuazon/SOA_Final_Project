@@ -1,0 +1,21 @@
+{
+  "name": "order",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Order microservice: order-history and order-detail REST API backed by its own DynamoDB table (orders, status transitions, cancellation).",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}

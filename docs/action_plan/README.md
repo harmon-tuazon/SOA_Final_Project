@@ -21,3 +21,8 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | PRD | Status |
 | --- | --- |
 | [0001 — React SPA Scaffold + S3 Static Hosting](frontend/0001-spa-scaffold-and-hosting.md) | Done |
+
+### order/
+| PRD | Status |
+| --- | --- |
+| [0001 — Order Service Scaffold](order/0001-service-scaffold.md) | In Progress |
