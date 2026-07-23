@@ -9,7 +9,8 @@ export function Layout() {
     <div>
       <header>
         <nav>
-          <Link to="/">Home</Link> | <Link to="/products">Products</Link>
+          <Link to="/">Home</Link> | <Link to="/products">Products</Link> |{' '}
+          <Link to="/orders">Your Orders</Link>
         </nav>
         {user && <span> Signed in as {user.name}</span>}
       </header>
