@@ -67,10 +67,9 @@ module "frontend" {
 
 # --- Service tables ----------------------------------------------------------
 #
-# No services are wired here yet. Each new service adds a `data` module
-# block (its own DynamoDB table) below — its matching `ecs-service` module
-# block goes in terraform/app-edge/main.tf instead. Use `/new-service` to
-# scaffold both halves of a service in one PR.
+# Each service adds a `data` module block (its own DynamoDB table) below —
+# its matching `ecs-service` module block goes in terraform/app-edge/main.tf
+# instead. Use `/new-service` to scaffold both halves of a service in one PR.
 #
 # module "example_table" {
 #   source = "../modules/data"
@@ -79,3 +78,14 @@ module "frontend" {
 #   name        = "example"
 #   hash_key    = "id"
 # }
+
+# order service (PRD order/0001). Permanent: orders survive every app-edge
+# teardown, and the pipeline is denied DeleteTable, so no CD run can drop
+# this table or its rows.
+module "order_table" {
+  source = "../modules/data"
+
+  name_prefix = var.name_prefix
+  name        = "order"
+  hash_key    = "id"
+}

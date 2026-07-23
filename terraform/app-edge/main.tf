@@ -58,10 +58,9 @@ module "alb" {
 
 # --- Services ----------------------------------------------------------------
 #
-# No services are wired here yet. Each new service adds an `ecs-service`
-# module block below — its matching `data` (table) module block goes in
-# terraform/app-base/main.tf instead. Use `/new-service` to scaffold both
-# halves of a service in one PR.
+# Each service adds an `ecs-service` module block below — its matching
+# `data` (table) module block goes in terraform/app-base/main.tf instead.
+# Use `/new-service` to scaffold both halves of a service in one PR.
 #
 # A service's table ARN is constructed as a STRING (never a remote_state
 # read against app-base's per-table outputs) — same pattern already used for
@@ -89,3 +88,28 @@ module "alb" {
 #   execution_role_arn  = local.execution_role_arn
 #   boundary_arn        = local.boundary_arn
 # }
+
+# order service (PRD order/0001) — the first service on the shared listener,
+# so it takes priority 100; the next service takes 110. Its table is created
+# by module.order_table in app-base and referenced here only as a
+# constructed ARN string, since this config cannot see app-base's modules.
+module "order_service" {
+  source = "../modules/ecs-service"
+
+  name_prefix        = var.name_prefix
+  region             = var.region
+  name               = "order"
+  port               = 3000
+  image_tag          = var.image_tag
+  route              = "/orders*"
+  priority           = 100
+  env                = { ORDER_TABLE = "${var.name_prefix}-order" }
+  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-order"]
+  vpc_id             = local.vpc_id
+  public_subnet_ids  = local.public_subnet_ids
+  cluster_id         = local.cluster_id
+  alb_sg_id          = local.alb_sg_id
+  listener_arn       = module.alb.listener_arn
+  execution_role_arn = local.execution_role_arn
+  boundary_arn       = local.boundary_arn
+}
