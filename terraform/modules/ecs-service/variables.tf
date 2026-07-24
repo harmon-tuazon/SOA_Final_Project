@@ -105,3 +105,9 @@ variable "boundary_arn" {
   description = "ARN of the soa-boundary permissions boundary policy, attached to this service's task role. Built as a string by the caller (never looked up via data source)."
   type        = string
 }
+
+variable "sqs_send_arns" {
+  description = "ARNs of SQS queues this service's task role may sqs:SendMessage to (e.g. the notifications queue, PRD platform/0008). Empty (the default) adds no statement — within the soa-boundary's existing SqsDataAccess ceiling, so this only narrows which queue(s) a producer can actually reach."
+  type        = list(string)
+  default     = []
+}

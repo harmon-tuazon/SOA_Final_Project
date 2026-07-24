@@ -61,41 +61,61 @@ resource "aws_iam_role" "task" {
 
 # Customer-managed policy (never an inline aws_iam_role_policy — the deployer
 # lacks iam:PutRolePolicy) scoping the task role to exactly its own table(s)
-# and their indexes, never account-wide DynamoDB access.
+# and their indexes, never account-wide DynamoDB access, plus (optionally)
+# sqs:SendMessage on named queues for a service that produces onto the async
+# branch (PRD platform/0008 — e.g. the user service publishing onto the
+# notifications queue). Both grants stay within the soa-boundary's existing
+# ceiling (DynamoDbDataAccess / SqsDataAccess) — this document only ever
+# narrows that ceiling to the resources this specific service owns.
 data "aws_iam_policy_document" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
-  statement {
-    sid    = "DynamoDbTableAccess"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:Query",
-      "dynamodb:Scan",
-      "dynamodb:BatchGetItem",
-      "dynamodb:BatchWriteItem",
-      "dynamodb:DescribeTable",
-    ]
-    resources = concat(
-      var.table_arns,
-      [for arn in var.table_arns : "${arn}/index/*"],
-    )
+  dynamic "statement" {
+    for_each = length(var.table_arns) > 0 ? [1] : []
+
+    content {
+      sid    = "DynamoDbTableAccess"
+      effect = "Allow"
+      actions = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable",
+      ]
+      resources = concat(
+        var.table_arns,
+        [for arn in var.table_arns : "${arn}/index/*"],
+      )
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.sqs_send_arns) > 0 ? [1] : []
+
+    content {
+      sid       = "SqsSendMessage"
+      effect    = "Allow"
+      actions   = ["sqs:SendMessage"]
+      resources = var.sqs_send_arns
+    }
   }
 }
 
 resource "aws_iam_policy" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
   name        = "${var.name_prefix}-${var.name}-task"
-  description = "DynamoDB access scoped to the ${var.name} service's own table(s) only."
+  description = "DynamoDB access scoped to the ${var.name} service's own table(s), and (if set) sqs:SendMessage scoped to its producer queue(s)."
   policy      = data.aws_iam_policy_document.task[0].json
 }
 
 resource "aws_iam_role_policy_attachment" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
   role       = aws_iam_role.task.name
   policy_arn = aws_iam_policy.task[0].arn

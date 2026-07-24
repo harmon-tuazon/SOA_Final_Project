@@ -450,6 +450,16 @@ data "aws_iam_policy_document" "deployer_permissions" {
     resources = ["*"]
   }
 
+  # Lambda: the async notification worker (PRD platform/0008). Mirrors the
+  # broad sqs:*/sns:* management grants above; infra-reviewer may tighten to
+  # the create/update/invoke/event-source-mapping subset if desired.
+  statement {
+    sid       = "LambdaManagement"
+    effect    = "Allow"
+    actions   = ["lambda:*"]
+    resources = ["*"]
+  }
+
   # CloudWatch Logs: ECS/Lambda log groups and streams.
   statement {
     sid       = "LogsManagement"

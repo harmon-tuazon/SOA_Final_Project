@@ -1,0 +1,5 @@
+# Build output of the archive_file data source (the zipped Lambda deployment
+# package) — generated on every plan/apply from var.source_file, never
+# committed. See main.tf's header comment for why Terraform owns packaging
+# here instead of a committed bootstrap zip.
+builds/

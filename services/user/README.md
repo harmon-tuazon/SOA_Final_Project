@@ -93,6 +93,7 @@ All config is read from the environment — nothing is hardcoded.
 | `CORS_ALLOWED_ORIGIN` | no | `*` | Value of `Access-Control-Allow-Origin` for the S3-hosted SPA's origin. The SPA sends an `Authorization` header, so **every** call is preflighted — an incorrect origin breaks the app even when the ALB is reachable. `*` is permissive and intended for local dev only. |
 | `DYNAMODB_ENDPOINT` | no (local only) | unset (real DynamoDB) | Overrides the DynamoDB endpoint for local dev against DynamoDB Local. Never set in AWS. |
 | `AWS_REGION` | no | `us-east-1` | Only consulted when `DYNAMODB_ENDPOINT` is set; in AWS the SDK/task role supplies region + credentials. |
+| `NOTIFICATIONS_QUEUE_URL` | no | unset (producer no-ops) | The notifications SQS queue this service publishes a `UserProfileCreated` event to on first profile creation (PRD [`platform/0008`](../../docs/action_plan/platform/0008-messaging-factory.md)), injected by `app-edge`. Unset in local dev and any deploy that predates `platform/0008` — the publish is a no-op, so the rest of the service behaves exactly as before. |
 
 If `COGNITO_USER_POOL_ID`/`COGNITO_CLIENT_ID` are unset, every protected
 route responds `401 { "error": "Auth not configured" }` rather than
@@ -142,17 +143,34 @@ npm test
   DynamoDB stand-in (mocking `@aws-sdk/lib-dynamodb`) and a mocked
   verifier: lazy profile creation, `PUT /users/me` stripping
   `userId`/`email`, the billing round trip, `DELETE` idempotency, and the
-  PAN/CVV guard writing nothing.
+  PAN/CVV guard writing nothing. Also proves the `UserProfileCreated`
+  producer (mocking `@aws-sdk/client-sqs`) truly no-ops when
+  `NOTIFICATIONS_QUEUE_URL` is unset.
+- `tests/events.test.js` — the `UserProfileCreated` producer with
+  `NOTIFICATIONS_QUEUE_URL` set (mocking `@aws-sdk/client-sqs`): publishes
+  exactly once on the first `GET /users/me` (the create), not again on a
+  second call, the message body matches the PRD §3.1 shape, and an SQS
+  rejection never changes the HTTP response.
 - `tests/health.test.js` — `/health` returns `200` with zero env set.
 
 `npm test` needs **no** live DynamoDB Local, **no** AWS credentials, and
 **no** network — safe to run in CI.
 
+## Async: the `UserProfileCreated` event
+
+On the caller's first `GET /users/me` (i.e. the row is genuinely created,
+not re-read after a lost create race), this service publishes a
+`UserProfileCreated` event to the notifications SQS queue — the producer
+seam described in
+[`platform/0008`](../../docs/action_plan/platform/0008-messaging-factory.md).
+See [`src/events.js`](src/events.js) and
+[`functions/notification-worker`](../../functions/notification-worker) for
+the consumer. This is **fire-and-forget**: the publish is never awaited by
+the HTTP response, and any SQS failure is only `console.error`'d — sync
+services never block on async work.
+
 ## Known limitations (deliberate, documented)
 
-- **No async path.** No `UserRegistered` event is published on first
-  upsert; that's the reserved `platform/0008` messaging factory, then
-  `user/0002`.
 - **Order service does not (yet) enforce this identity.** `order`'s
   `customerId` remains an opaque, unauthenticated client-supplied string —
   see [`user/0001` §9.2](../../docs/action_plan/user/0001-user-service.md#92-known-gap-this-prd-deliberately-leaves-open).
