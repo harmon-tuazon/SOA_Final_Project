@@ -9,10 +9,16 @@
 
 export interface AppConfig {
   apiBaseUrl: string;
+  /** Cognito user pool id (region-prefixed). Empty = auth not configured. */
+  cognitoUserPoolId: string;
+  /** Cognito public app client id (no secret — see ADR 0005). Empty = auth not configured. */
+  cognitoClientId: string;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
   apiBaseUrl: '',
+  cognitoUserPoolId: '',
+  cognitoClientId: '',
 };
 
 let cachedConfig: AppConfig = DEFAULT_CONFIG;
@@ -36,6 +42,9 @@ export async function loadConfig(): Promise<AppConfig> {
     const parsed = (await response.json()) as Partial<AppConfig>;
     cachedConfig = {
       apiBaseUrl: typeof parsed.apiBaseUrl === 'string' ? parsed.apiBaseUrl : '',
+      cognitoUserPoolId:
+        typeof parsed.cognitoUserPoolId === 'string' ? parsed.cognitoUserPoolId : '',
+      cognitoClientId: typeof parsed.cognitoClientId === 'string' ? parsed.cognitoClientId : '',
     };
   } catch (err) {
     // Expected when the backend/edge isn't deployed, or config.json is
@@ -52,4 +61,14 @@ export async function loadConfig(): Promise<AppConfig> {
 /** Returns the currently loaded API base URL (empty string if unconfigured). */
 export function getApiBaseUrl(): string {
   return cachedConfig.apiBaseUrl;
+}
+
+/**
+ * Returns the currently loaded Cognito pool/client ids. Both are empty
+ * strings when the pool hasn't been provisioned/wired yet (see
+ * PRD platform/0009) — callers should treat that as "auth not configured"
+ * rather than an error (PRD user/0001 §4.6).
+ */
+export function getCognitoConfig(): { userPoolId: string; clientId: string } {
+  return { userPoolId: cachedConfig.cognitoUserPoolId, clientId: cachedConfig.cognitoClientId };
 }

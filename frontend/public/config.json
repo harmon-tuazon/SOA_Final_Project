@@ -1,3 +1,5 @@
 {
-  "apiBaseUrl": ""
+  "apiBaseUrl": "",
+  "cognitoUserPoolId": "",
+  "cognitoClientId": ""
 }
