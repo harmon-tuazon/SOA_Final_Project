@@ -9,6 +9,7 @@ Index of all project documentation. Structure and conventions are governed by [`
 | [architecture/](architecture/) | How the system is shaped and what it does — component responsibilities, service interactions, data/request flows, requirements, and NFRs. Immutable ADRs live in [architecture/decisions/](architecture/decisions/). |
 | [action_plan/](action_plan/) | PRDs — plans of record approved before executing substantial work, organized per microservice plus a `platform/` folder. |
 | [operations/](operations/) | Everything about running the system — local setup, CI/CD pipeline, AWS setup, and operational procedures (deploy, rollback, scale, teardown, cost check). |
+| [to-dos/](to-dos/) | Pending manual, out-of-band, or deployment-gated actions a human must still perform — admin applies, inbox confirmations, GitHub settings. Governed by [`.claude/rules/deployment-todos.md`](../.claude/rules/deployment-todos.md); [to-dos/README.md](to-dos/README.md) is the live checklist. |
 
 ## Top-level docs
 
