@@ -29,7 +29,7 @@ The demo React SPA ([`frontend/`](../../frontend/)) — a Part 4 "showcase" asse
 
 The SPA never hardcodes the backend's API URL. It fetches a runtime `/config.json` object once at startup (`src/lib/config.ts`, awaited before render in `src/main.tsx`); backend `cd.yml` rewrites that file on S3 with the live ALB DNS after every `app-edge` apply, and `frontend-cd.yml` (the frontend's own build+deploy workflow) excludes `config.json` from its sync so a frontend-only deploy never clobbers the live URL. See [ADR 0004](decisions/0004-frontend-hosting.md) for the full reasoning, and [operations/adding-a-frontend-feature.md](../operations/adding-a-frontend-feature.md) for how a page/feature is added.
 
-HTTPS (CloudFront + a custom domain) and real Cognito auth are **deferred** to one later, coherent PRD — an HTTPS-served page cannot call today's HTTP-only ALB (mixed content), and Cognito's hosted UI requires HTTPS redirect URIs. Only an auth stub (`src/auth/AuthContext.tsx`, `src/auth/ProtectedRoute.tsx`) is scaffolded for now.
+**HTTPS (CloudFront + a custom domain) remains deferred** to one later, coherent PRD — an HTTPS-served page cannot call today's HTTP-only ALB (mixed content). **Application auth, however, is no longer deferred:** per [ADR 0005](decisions/0005-cognito-auth-over-http.md), the HTTPS-redirect-URI requirement belongs only to Cognito's hosted UI, not to Cognito's `SignUp`/`ConfirmSignUp`/`InitiateAuth` APIs — so the SPA authenticates **SPA-direct** against a Cognito user pool + public app client (`terraform/modules/cognito/`, wired into `app-base`, permanent and free), calling those APIs from a custom login UI with no hosted UI and no redirect URIs. The pool/client ids are non-secret and reach the SPA through the same runtime `config.json` seam described above.
 
 ## No hardcoded endpoints (project-wide convention)
 
@@ -49,7 +49,8 @@ Neither config is the human-applied identity foundation in `terraform/` root. Se
 - [ADR 0001 — Platform & Compute Architecture](decisions/0001-platform-and-compute-architecture.md) — why ECS/Fargate + public subnets over EKS/private networking.
 - [ADR 0002 — Terraform Configuration Topology](decisions/0002-terraform-configuration-topology.md) — why the network and compute layer live in a separate, destroyable config, apart from the identity foundation.
 - [ADR 0003 — Base/Edge Split](decisions/0003-base-edge-split.md) — why that billable config is itself split into a permanent `app-base` and a destroyable `app-edge`.
-- [ADR 0004 — Frontend Hosting](decisions/0004-frontend-hosting.md) — why the SPA is S3-hosted over HTTP with a runtime `config.json`, and why HTTPS/auth are deferred.
+- [ADR 0004 — Frontend Hosting](decisions/0004-frontend-hosting.md) — why the SPA is S3-hosted over HTTP with a runtime `config.json`, and why HTTPS is deferred (narrowed by ADR 0005 on Cognito auth).
+- [ADR 0005 — Cognito Auth, SPA-Direct, Over HTTP](decisions/0005-cognito-auth-over-http.md) — why application auth is SPA-direct Cognito over HTTPS APIs (no hosted UI), without waiting for the deferred HTTPS PRD.
 - [PRD platform/0003 — Network Foundation](../action_plan/platform/0003-network.md) — the plan and outcome for the network resources described above.
 - [PRD platform/0004 — ECS + ALB](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the compute layer and golden-path modules.
 - [PRD platform/0006 — Base/Edge Split](../action_plan/platform/0006-base-edge-split.md) — the plan and outcome for the base/edge split.
