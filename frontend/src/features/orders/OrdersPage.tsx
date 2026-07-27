@@ -42,14 +42,21 @@ export function OrdersPage() {
   const createOrder = useCreateOrder();
   const cancelOrder = useCancelOrder();
 
-  function handlePlaceDemoOrder(e: FormEvent) {
-    e.preventDefault();
+  function handlePlaceDemoOrder(e?: FormEvent) {
+    e?.preventDefault();
     createOrder.mutate({ ...DEMO_ORDER, customerId });
   }
 
   return (
     <section>
       <h1>Your Orders</h1>
+
+      <p>
+        <Link className="btn--primary" to="/orders/new">
+          + Place a new order
+        </Link>{' '}
+        — choose your own items and shipping address.
+      </p>
 
       <p>
         <label>
@@ -63,8 +70,8 @@ export function OrdersPage() {
       </p>
 
       <form onSubmit={handlePlaceDemoOrder}>
-        <button type="submit" disabled={createOrder.isPending || !customerId}>
-          {createOrder.isPending ? 'Placing order…' : 'Place a demo order'}
+        <button type="button" className="btn" onClick={() => handlePlaceDemoOrder()} disabled={createOrder.isPending || !customerId}>
+          {createOrder.isPending ? 'Placing order…' : 'Place a demo order (sample basket)'}
         </button>
         {createOrder.isError && (
           <p role="status">
@@ -88,50 +95,65 @@ export function OrdersPage() {
       )}
 
       {!isLoading && !isError && orders && orders.length > 0 && (
-        <ul>
+        <ul className="order-list">
           {orders.map((order) => (
             <li key={order.id}>
-              <article>
-                <h2>
-                  <Link to={`/orders/${order.id}`}>Order {order.id.slice(0, 8)}</Link>
-                </h2>
-
-                <dl>
-                  <dt>Placed</dt>
-                  <dd>{formatDate(order.placedAt)}</dd>
-                  <dt>Total</dt>
-                  <dd>{formatMoney(order.total)}</dd>
-                  <dt>Status</dt>
-                  <dd>{order.status}</dd>
-                  <dt>
-                    {order.status === 'DELIVERED' ? 'Delivered' : 'Estimated delivery'}
-                  </dt>
-                  <dd>{formatDate(order.deliveryEstimate)}</dd>
+              <article className="order-card">
+                <dl className="order-card__bar">
+                  <div>
+                    <dt>Order placed</dt>
+                    <dd>{formatDate(order.placedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Total</dt>
+                    <dd>{formatMoney(order.total)}</dd>
+                  </div>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>
+                      <span className="badge" data-status={order.status}>
+                        {order.status}
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{order.status === 'DELIVERED' ? 'Delivered' : 'Est. delivery'}</dt>
+                    <dd>{formatDate(order.deliveryEstimate)}</dd>
+                  </div>
                 </dl>
 
-                <ul>
-                  {order.items.map((item) => (
-                    <li key={item.productId}>
-                      {item.name} × {item.qty} — {formatMoney(item.unitPrice * item.qty)}
-                    </li>
-                  ))}
-                </ul>
+                <div className="order-card__body">
+                  <h2>
+                    <Link to={`/orders/${order.id}`}>Order #{order.id.slice(0, 8)}</Link>
+                  </h2>
 
-                <p>
-                  <Link to={`/orders/${order.id}`}>View order details</Link>
-                </p>
+                  <ul className="line-items">
+                    {order.items.map((item) => (
+                      <li key={item.productId}>
+                        {item.name} × {item.qty} — {formatMoney(item.unitPrice * item.qty)}
+                      </li>
+                    ))}
+                  </ul>
 
-                {/* The service only allows cancelling from PLACED and answers
-                    409 otherwise, so the button follows the same rule. */}
-                {order.status === 'PLACED' && (
-                  <button
-                    type="button"
-                    onClick={() => cancelOrder.mutate(order.id)}
-                    disabled={cancelOrder.isPending}
-                  >
-                    {cancelOrder.isPending ? 'Cancelling…' : 'Cancel order'}
-                  </button>
-                )}
+                  <div className="order-actions">
+                    <Link className="btn" to={`/orders/${order.id}`}>
+                      View order details
+                    </Link>
+
+                    {/* The service only allows cancelling from PLACED and answers
+                        409 otherwise, so the button follows the same rule. */}
+                    {order.status === 'PLACED' && (
+                      <button
+                        type="button"
+                        className="btn--danger"
+                        onClick={() => cancelOrder.mutate(order.id)}
+                        disabled={cancelOrder.isPending}
+                      >
+                        {cancelOrder.isPending ? 'Cancelling…' : 'Cancel order'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </article>
             </li>
           ))}
