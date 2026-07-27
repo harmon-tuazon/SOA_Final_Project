@@ -63,7 +63,11 @@ export function OrderDetailPage() {
 
       <dl>
         <dt>Status</dt>
-        <dd>{order.status}</dd>
+        <dd>
+          <span className="badge" data-status={order.status}>
+            {order.status}
+          </span>
+        </dd>
         <dt>Placed</dt>
         <dd>{formatDate(order.placedAt)}</dd>
         <dt>{order.status === 'DELIVERED' ? 'Delivered' : 'Estimated delivery'}</dt>
@@ -115,25 +119,29 @@ export function OrderDetailPage() {
 
       <h2>Actions</h2>
 
-      {advanceTo && (
-        <button
-          type="button"
-          onClick={() => updateStatus.mutate({ id: order.id, status: advanceTo })}
-          disabled={updateStatus.isPending}
-        >
-          {updateStatus.isPending ? 'Updating…' : `Mark as ${advanceTo}`}
-        </button>
-      )}
+      <div className="order-actions">
+        {advanceTo && (
+          <button
+            type="button"
+            className="btn--primary"
+            onClick={() => updateStatus.mutate({ id: order.id, status: advanceTo })}
+            disabled={updateStatus.isPending}
+          >
+            {updateStatus.isPending ? 'Updating…' : `Mark as ${advanceTo}`}
+          </button>
+        )}
 
-      {order.status === 'PLACED' && (
-        <button
-          type="button"
-          onClick={() => cancelOrder.mutate(order.id)}
-          disabled={cancelOrder.isPending}
-        >
-          {cancelOrder.isPending ? 'Cancelling…' : 'Cancel order'}
-        </button>
-      )}
+        {order.status === 'PLACED' && (
+          <button
+            type="button"
+            className="btn--danger"
+            onClick={() => cancelOrder.mutate(order.id)}
+            disabled={cancelOrder.isPending}
+          >
+            {cancelOrder.isPending ? 'Cancelling…' : 'Cancel order'}
+          </button>
+        )}
+      </div>
 
       {!advanceTo && order.status !== 'PLACED' && (
         <p>No further actions — this order is {order.status.toLowerCase()}.</p>

@@ -4,6 +4,7 @@ import { HomePage } from './pages/HomePage';
 import { ProductsPage } from './features/products/ProductsPage';
 import { ProductDetailPage } from './features/products/ProductDetailPage';
 import { OrdersPage } from './features/orders/OrdersPage';
+import { NewOrderPage } from './features/orders/NewOrderPage';
 import { OrderDetailPage } from './features/orders/OrderDetailPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
@@ -39,6 +40,14 @@ export const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <OrdersPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'orders/new',
+        element: (
+          <ProtectedRoute>
+            <NewOrderPage />
           </ProtectedRoute>
         ),
       },
