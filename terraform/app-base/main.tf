@@ -89,3 +89,14 @@ module "order_table" {
   name        = "order"
   hash_key    = "id"
 }
+
+# product service (PRD product/0001). Permanent: the catalog survives every
+# app-edge teardown, and the pipeline is denied DeleteTable, so no CD run can
+# drop this table or its rows.
+module "product_table" {
+  source = "../modules/data"
+
+  name_prefix = var.name_prefix
+  name        = "product"
+  hash_key    = "id"
+}

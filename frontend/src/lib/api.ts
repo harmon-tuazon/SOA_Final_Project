@@ -8,12 +8,36 @@ import { getApiBaseUrl } from './config';
 
 export class ApiError extends Error {
   status: number;
+  /** Parsed JSON error body, when the response was valid JSON (e.g. `{ error: '...' }`). */
+  body: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
   }
+}
+
+/**
+ * Pulls a human-readable message out of a thrown error: prefers a service's
+ * `{ error: string }` JSON body (e.g. the 409 a stock adjustment returns),
+ * falls back to the error's own message, then to `fallback`.
+ */
+export function errorMessage(err: unknown, fallback = 'Something went wrong.'): string {
+  if (
+    err instanceof ApiError &&
+    err.body &&
+    typeof err.body === 'object' &&
+    'error' in err.body &&
+    typeof (err.body as { error: unknown }).error === 'string'
+  ) {
+    return (err.body as { error: string }).error;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return fallback;
 }
 
 /**
@@ -48,14 +72,17 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (!response.ok) {
     let detail = '';
+    let parsedBody: unknown;
     try {
       detail = await response.text();
+      parsedBody = detail ? JSON.parse(detail) : undefined;
     } catch {
-      // ignore — body may be empty or unreadable
+      // ignore — body may be empty, unreadable, or not JSON
     }
     throw new ApiError(
       `Request to ${path} failed with ${response.status}${detail ? `: ${detail}` : ''}`,
       response.status,
+      parsedBody,
     );
   }
 
