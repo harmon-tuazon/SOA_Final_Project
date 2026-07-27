@@ -237,4 +237,73 @@ Plus the automatic gates: `ci.yml` discovers `services/product`, builds it, and 
 
 ## Outcome
 
-_Filled after execution._
+**Executed as planned — both halves in one PR.** 2026-07-27. Branch `feat/product-service`, commit `caa8039`. Status stays **In Progress** until CD is green and §4.9–§4.10 are verified against the live ALB.
+
+### What was built
+
+`services/product/`, scaffolded from `_template` with all three tokens replaced, implementing every route and rule in §3.2:
+
+- `src/products.js` — pure domain logic (field validation, `buildProductFromInput`, `buildProductPatch`, `isValidStockDelta`), no HTTP or AWS imports.
+- `src/app.js` — Express: `/health` (left DB-free, untouched from the template), the seven product routes, and the env-driven CORS middleware copied from `order` (no `cors` dependency added).
+- `tests/` — 3 suites, **73 tests, all passing** with no AWS credentials, DynamoDB mocked via a Jest module mock.
+- `README.md` documenting routes, env vars, local run, and both known limitations.
+- `docker-compose.yml` — a `product` block on host port **3001** (order holds 3000).
+
+**Terraform, written in this PR** (unlike order/0001, which handed its blocks off and consequently red-built `main`): `module "product_table"` in `app-base`, `module "product_service"` in `app-edge` at priority 110. Both call existing shared modules; `terraform/modules/*` and the order blocks are untouched.
+
+**Frontend:** the placeholder stub in `frontend/src/features/products/` became a real catalog page (server-side `?category=`/`?q=` filtering), a new `ProductDetailPage.tsx`, and full create/edit/delete/stock-adjust actions, all through `apiFetch`.
+
+### Deviations from plan
+
+All three are minor and were flagged rather than silently taken:
+
+1. **`?q=` is filtered in-app, after the `Scan`, not in the `FilterExpression`.** DynamoDB has no case-insensitive `contains` operator, so a literal reading of §3.2 was not implementable. `?category=` *is* pushed down as a `FilterExpression`. Consistent with §9's Scan-not-GSI framing and documented in the service README.
+2. **`PATCH /products/:id` uses one conditional `UpdateItem` with `ReturnValues: ALL_NEW`** rather than order's Get-then-Update. Stricter and one round trip cheaper; the condition failure alone distinguishes 404, so the two-call disambiguation §3.2 asks for is needed only on the stock route.
+3. **`frontend/src/lib/api.ts` gained `ApiError.body` + an `errorMessage()` helper** — not named in §5's file list. Required to satisfy §3.3's "surface the 409 readably"; the alternative was parsing raw JSON out of `error.message` in each page. Purely additive; the orders feature is unaffected.
+
+Also worth noting: the category dropdown is populated by a **second, unfiltered** `useProducts()` call. Deriving it from the filtered list would collapse the dropdown to one option once a category is picked, trapping the user. Two GETs is an acceptable trade at the demo scale §9 assumes.
+
+### Success criteria status
+
+| Criterion | Result |
+| --- | --- |
+| §4.1 `npm test`, no AWS creds | **Met** — 73/73 pass, incl. the attacker-payload and 409-not-500 condition-failure cases |
+| §4.2 non-root image | **Not verified** — Docker unavailable in this environment. The `Dockerfile` is byte-identical to the deployed order one (`USER node`), so it should hold, but it was not observed |
+| §4.3 no hardcoded endpoints | **Met** — grep clean over `services/product/src` and `frontend/src` |
+| §4.4 `fmt`/`validate` both configs | **Not verified locally** — Terraform is not installed here. Falls to CI's `soa-ci-plan` run |
+| §4.5 plan shows creates, 0 destroys | **Not verified locally** — same reason; CI must confirm |
+| §4.6 priority 110 unique | **Met** — `100` and `110` each appear exactly once as live declarations in `app-edge/main.tf` |
+| §4.7 boundary + table-scoped role | **Met** — `infra-reviewer` traced it through `modules/ecs-service`: `permissions_boundary` set, customer-managed `soa-product-task` policy scoped to the constructed table ARN + `/index/*` only |
+| §4.8 frontend typecheck + build | **Met** — both clean; no bare `fetch(` outside `lib/api.ts` |
+| §4.9 `curl /products` → 200 | **Pending merge** — not deployed yet |
+| §4.10 live round-trip | **Pending merge** |
+| §4.11 index line, order untouched | **Met** — order blocks byte-for-byte unchanged |
+
+### Review pass
+
+`infra-reviewer` audited the full diff and returned **no blockers and no should-fix findings**. It verified character-by-character that the table name created by `app-base` (`${var.name_prefix}-product`), the injected `PRODUCT_TABLE` env value, and the `table_arns` string all match — a mismatch there would deploy a service that passes its health check and 500s on every real request. It also confirmed the stock route's `ConditionExpression` (`stock >= :minRequired` where `minRequired = -delta`) genuinely prevents overselling under concurrency, and that a non-condition SDK error short-circuits to 500 before the 404/409 disambiguation read ever runs.
+
+### Still owed after merge (§4.9–§4.10)
+
+```bash
+ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/products"   # expect 200
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ALB/orders"     # expect 200 — no regression
+
+ID=$(curl -s -XPOST "http://$ALB/products" -H 'content-type: application/json' \
+  -d '{"name":"Echo Dot","price":49.99,"category":"Electronics","stock":1}' \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+curl -s -XPATCH "http://$ALB/products/$ID/stock" -H 'content-type: application/json' -d '{"delta":-1}'  # 200, stock 0
+curl -s -o /dev/null -w '%{http_code}\n' -XPATCH "http://$ALB/products/$ID/stock" \
+  -H 'content-type: application/json' -d '{"delta":-1}'           # expect 409
+curl -s -o /dev/null -w '%{http_code}\n' -XDELETE "http://$ALB/products/$ID"   # expect 204
+```
+
+Or just open the SPA's Products page and use the create form and the ± stock buttons.
+
+### Follow-ups
+
+- `order/0002` — order → product sync call + stock decrement (the rubric's service-to-service point).
+- `platform/0008` — the SQS→Lambda→SNS async path (rubric-required, still unbuilt; `functions/` does not exist).
+- A `category` GSI (needs the shared `data` module extended) and auth, both deferred as designed.
