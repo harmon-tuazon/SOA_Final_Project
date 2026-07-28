@@ -1,10 +1,12 @@
 # Merge the stacked PRs in order
 
-- **Status:** Pending
+- **Status:** Done (2026-07-28)
 - **Owner:** repo owner (GitHub UI)
 - **When:** now — this is the execution sequence for the three approved PRDs ([platform/0009](../action_plan/platform/0009-cognito-user-pool.md) → [user/0001](../action_plan/user/0001-user-service.md) → [platform/0008](../action_plan/platform/0008-messaging-factory.md)).
 - **Source:** the run-order constraints in each PRD's §9 (remote-state dependencies + the deployer IAM gate).
 - **Verification:** after the last merge, *Infrastructure CD* is green and the welcome-email path works end to end.
+
+> **Done (2026-07-28):** the whole stack merged in order on 2026-07-28 — docs/PRDs (#20), Cognito `platform/0009` (#21), `user/0001` (#22), messaging base `platform/0008` (#25/#27), and the messaging edge-wiring (#28) — each after its predecessor's CD went green. CD is green on `main`. (Tracker mark re-applied 2026-07-28.)
 
 ## Why the order is fixed
 
