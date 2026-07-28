@@ -1,0 +1,65 @@
+# 0006 — Service Discovery: ECS Service Connect + a Shared Mesh Security Group
+
+> Internal service-to-service calls address peers by a stable logical name (`http://product:3000`) via **ECS Service Connect**, not a churning task IP or the public ALB; every service's task additionally carries one shared internal **mesh security group** (self-ingress only) so any service can reach any other service with no per-pair SG wiring; the **order → product** call on order placement is the concrete, demonstrating use of it.
+
+- **Status:** Accepted
+- **Date:** 2026-07-28
+
+## Context
+
+Every service so far (`order`, `product`, `user`) is reachable only from the outside, through the shared ALB's path-based routing (per [ADR 0001](0001-platform-and-compute-architecture.md)). Nothing let one service call another directly, and the project's rubric expects a demonstrated service-discovery mechanism plus genuine microservice-to-microservice interaction, not just services that each sit behind the same load balancer.
+
+Two things had to be decided together, since they're two halves of the same feature ([PRD platform/0012](../../action_plan/platform/0012-service-discovery.md)):
+
+1. **How does a service find another service's network address**, given ECS Fargate tasks get a fresh IP on every deploy/scale event, and routing everything back out through the public ALB for an internal call would be both wasteful (double hop through the internet-facing load balancer) and would need the caller to somehow discover the ALB's own churning DNS name — precisely the problem the [no-hardcoded-endpoint rule](../../../.claude/rules/service-contract.md) already exists to prevent.
+2. **What gets to reach what**, now that task-to-task traffic exists at all. The public path (ALB → task) was already least-privilege (per-service target group, task SG scoped to the ALB SG only); this is a new, different traffic pattern (task → task) with no established SG shape to reuse.
+
+The project's constraints are unchanged: stay free/cheap (no new billable resource class), keep the base/edge split intact (permanent foundation vs. destroyable compute — [ADR 0003](0003-base-edge-split.md)), and preserve least privilege wherever it's cheap to do so.
+
+## Decision
+
+**Discovery: ECS Service Connect**, over plain AWS Cloud Map DNS or a full service mesh (App Mesh).
+
+- One `aws_service_discovery_http_namespace` (named after the shared `name_prefix`, e.g. `soa`) is created once in `terraform/app-base/` (`terraform/modules/ecs-cluster/main.tf:150-153`) — permanent and free, alongside the cluster, so it survives every `app-edge` teardown/recreate.
+- Every service's `ecs-service` module instance (in `terraform/app-edge/`) sets `service_connect_configuration { enabled = true }` on its `aws_ecs_service`, joining that namespace and advertising its own app port under its own logical name via a named container port + `client_alias` (`terraform/modules/ecs-service/main.tf:281-298`, and the named `portMappings` entry the task definition needs for Service Connect to attach an Envoy sidecar, `main.tf:212-218`). This is uniform — every service gets it, with no per-service opt-in — so a future service inherits discoverability automatically.
+- A caller reads its peer's address from env, never a literal string in code — e.g. the order service's `PRODUCT_SERVICE_URL = "http://product:3000"`, injected by `app-edge/main.tf:143-150` and read in [`services/order/src/productClient.js:18-20`](../../../services/order/src/productClient.js#L18-L20). This is the same "config from env, never hardcoded" rule the ALB DNS churn already forced (see "No hardcoded endpoints" in [overview.md](../overview.md#no-hardcoded-endpoints-project-wide-convention)) — Service Connect names are just as much a moving implementation detail as the ALB's DNS is, even though in practice `http://<name>:3000` is stable across deploys; the rule is enforced uniformly rather than special-cased.
+
+**Access control: one shared "mesh" security group**, self-referencing, over per-caller SG pairs.
+
+- `terraform/modules/ecs-cluster/main.tf:164-188` creates one `aws_security_group` (`<prefix>-mesh`) in `app-base`, with a single ingress rule: the app port (3000, `var.mesh_port`) from **itself** (`self = true`). Every service's task attaches this SG *in addition to* its existing ALB-scoped task SG (`terraform/modules/ecs-service/main.tf:257-266`) — the public ingress path is untouched.
+- Because the rule is self-referencing rather than naming specific peer SGs, **any** task carrying the mesh SG can reach **any other** task carrying it on port 3000, and a brand-new service inherits this by attaching the same SG — no new ingress rule to add per pair as services are added.
+- **Trade accepted deliberately:** this is broader than strict least-privilege would allow (product's task, for instance, doesn't *need* to accept traffic from user's task, only from order's) — a stricter design would give each service its own ingress rule naming only the specific caller SGs it expects. The shared mesh SG was chosen over that for simplicity and uniformity: with 3 services (and more to come via `/new-service`), per-pair SG wiring turns into `O(n²)` rules maintained by hand, is easy to leave out for a new service, and buys little in a project of this size and threat model. The blast radius is still bounded — the mesh SG **only trusts its own members**, i.e. tasks in this same cluster; it grants nothing to the internet or to anything outside the VPC's tasks. If a future service's threat model needs tighter isolation, that service can skip the mesh SG (or a stricter, per-pair SG can be added for it) without touching this shared one.
+
+**The demonstrating call: order → product, on placement.**
+
+- `POST /orders` validates every line item's `productId` against `GET http://product:3000/products/:id` before saving the order ([`services/order/src/productClient.js`](../../../services/order/src/productClient.js), invoked from [`services/order/src/app.js:137`](../../../services/order/src/app.js#L137)). It is **read-only** — no stock decrement, no write back to product; that stays out of scope as distributed-transaction territory (per PRD platform/0012 §3).
+- Response mapping is explicit and fails closed: `200` → continue and save the order; `404` → reject with `400` (unknown `productId`); anything else — timeout, network error, or a `5xx` even after Service Connect's own proxy-level retries — is treated as `503` ("product service unavailable"), never as "assume it's fine and save anyway" (`productClient.js:40-101`).
+
+**The sidecar's cost: a small task-memory bump.** Service Connect injects an Envoy proxy container into every task alongside the app container. The original 512 MiB default was tight for Node + Envoy together, so `terraform/modules/ecs-service/variables.tf:29-33` bumps the module's default `memory` to 1024 MiB (still within `cpu = 256`'s valid Fargate memory range of 512/1024/2048). This is the only cost impact of the whole feature — the namespace and Service Connect itself carry no separate AWS charge.
+
+## Consequences
+
+- **Services are now reachable by logical name inside the cluster**, not just from the ALB. Any current or future service can call `http://<name>:3000` for another service on the mesh, with no Terraform change needed beyond the two standard module blocks every service already gets (per [`service-contract.md`](../../../.claude/rules/service-contract.md), [adding-a-service.md](../../operations/adding-a-service.md)).
+- **`order` now depends on `product` being reachable to place an order** — a deliberate, new coupling introduced specifically to demonstrate real inter-service interaction. It is read-only and fails closed (`503`) rather than silently degrading, so the coupling is visible and safe, but it is a genuine availability dependency: if `product` is down or scaled to 0, `order` cannot place new orders even though its own dependencies (its own table) are healthy. Documented here as accepted, not accidental.
+- **The mesh SG is broader than strict least privilege**, as described above. This is an accepted, bounded trade (still cluster-internal only), not an oversight — `infra-reviewer` confirmed the mesh SG's only ingress source is itself, nothing from the internet or an unrelated VPC resource.
+- **Fargate Spot is unaffected** — Service Connect and its Envoy sidecar run under either capacity provider; `use_fargate_spot` (per-service, [`terraform/modules/ecs-service/variables.tf:115-119`](../../../terraform/modules/ecs-service/variables.tf#L115)) is an orthogonal choice.
+- **Cost stays effectively free**: the namespace, Service Connect enablement, and the mesh SG are all `$0`; the only line-item is the per-task memory bump (512 → 1024 MiB), on the order of a few dollars/month across the fleet, further reduced by Fargate Spot where enabled — quantified in [PRD platform/0012 §5](../../action_plan/platform/0012-service-discovery.md#5-resources).
+- **`app-base`/`app-edge` split is preserved**: the namespace and mesh SG (permanent, shared, cheap to leave standing) live in `app-base`; the per-service `service_connect_configuration` and the SG *attachment* (which changes whenever a service's task definition changes anyway) live in `app-edge`, consistent with [ADR 0003](0003-base-edge-split.md)'s lifecycle split. `app-edge` reads both via `terraform_remote_state`, wrapped in `try(...)` so `app-edge` still plans before `app-base` has applied the new outputs — the same pattern already used for `alerts_topic_arn` (see `terraform/app-edge/main.tf:70-78`).
+- **No new hardcoded-endpoint exposure**: `PRODUCT_SERVICE_URL` is injected env, read by [`productClient.js`](../../../services/order/src/productClient.js), consistent with the existing no-hardcoded-endpoint convention (see [overview.md](../overview.md#no-hardcoded-endpoints-project-wide-convention)) and [`service-contract.md`](../../../.claude/rules/service-contract.md).
+
+## Alternatives considered
+
+- **Plain AWS Cloud Map (DNS-based service discovery), no Service Connect.** Rejected as the primary mechanism: Cloud Map alone gives DNS records but no proxy — no built-in connection-level retries, no per-connection CloudWatch metrics, and the caller has to handle a task's DNS record still pointing at a task that's mid-deregistration during a rolling deploy. Service Connect uses Cloud Map under the hood but adds the Envoy sidecar specifically to smooth over exactly that class of transient failure, which matters here since `order`'s call to `product` is a synchronous dependency on the request path.
+- **Per-pair (per-caller) security group scoping** (e.g. product's task SG allows ingress only from order's task SG, order's only from the ALB, etc.). Rejected in favor of the shared mesh SG for the reasons in "Decision" above — simplicity and uniformity as services are added, at the cost of a broader-than-strictly-necessary but still cluster-internal-only trust boundary. Revisit per-pair scoping if a future service's data sensitivity warrants it.
+- **A full service mesh (AWS App Mesh or similar).** Rejected as disproportionate: App Mesh adds its own control plane, virtual nodes/routers, and Envoy configuration to manage, well beyond what three (soon more) simple HTTP services calling each other need. Service Connect already provides the proxy, retries, and metrics this project needs at a fraction of the operational surface.
+- **Routing the order→product call back out through the public ALB** (order calls its own `/products*` route on the ALB). Rejected: it is a needless extra hop through the internet-facing load balancer for a call that never needs to leave the cluster, and it would have required the order service to somehow learn the ALB's own churning DNS name from inside the cluster — reintroducing the exact problem the no-hardcoded-endpoint rule and this ADR both exist to avoid.
+- **Writing back to product (stock decrement) as part of this change.** Rejected — out of scope per PRD platform/0012 §3: a cross-service write raises distributed-transaction concerns (partial failure, compensation) that are a separate, larger design decision, not a natural extension of "add discovery."
+
+## Related
+
+- [PRD platform/0012 — Service Discovery](../../action_plan/platform/0012-service-discovery.md) — the plan this ADR records the outcome of.
+- [ADR 0001 — Platform & Compute Architecture](0001-platform-and-compute-architecture.md) — the ALB/ECS Fargate baseline this extends.
+- [ADR 0003 — Base/Edge Split](0003-base-edge-split.md) — why the namespace and mesh SG live in `app-base` while the per-service Service Connect config lives in `app-edge`.
+- [`service-contract.md`](../../../.claude/rules/service-contract.md) — the no-hardcoded-endpoint rule this decision continues to honor.
+- [operations/adding-a-service.md](../../operations/adding-a-service.md) — how a new service inherits Service Connect + the mesh SG by default.
+- [architecture/overview.md](../overview.md) — the system diagram and Compute section, updated with the order→product edge this ADR introduces.

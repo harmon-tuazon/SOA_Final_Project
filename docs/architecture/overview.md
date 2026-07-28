@@ -4,7 +4,7 @@ How the system is shaped, starting from the network every workload runs in. This
 
 ## System diagram
 
-The picture below matches what's on `main` today: three ECS Fargate services (`order`, `product`, `user`) behind one ALB, each with its own DynamoDB table in `app-base`; the SPA on S3; Cognito called SPA-direct; and the SQS→Lambda→SNS notification pipeline. **One leg is not live yet** — the user service's own code already publishes `UserProfileCreated` (fire-and-forget, no-ops without a queue URL), but the `app-edge` wiring that injects `NOTIFICATIONS_QUEUE_URL` and grants its task role `sqs:SendMessage` is on the separate `feat/messaging-edge-wiring` branch, not yet merged — see [PRD platform/0008](../action_plan/platform/0008-messaging-factory.md) and [PRD platform/0011](../action_plan/platform/0011-rubric-quick-wins.md#3-scope) ("out of scope: merging `feat/messaging-edge-wiring`"). That edge is marked dotted and annotated below rather than shown as working.
+The picture below matches what's on `main` today: three ECS Fargate services (`order`, `product`, `user`) behind one ALB, each with its own DynamoDB table in `app-base`; the SPA on S3; Cognito called SPA-direct; internal service-to-service discovery via ECS Service Connect (the `order`→`product` validation call on order placement); and the SQS→Lambda→SNS notification pipeline. **One leg is not live yet** — the user service's own code already publishes `UserProfileCreated` (fire-and-forget, no-ops without a queue URL), but the `app-edge` wiring that injects `NOTIFICATIONS_QUEUE_URL` and grants its task role `sqs:SendMessage` is on the separate `feat/messaging-edge-wiring` branch, not yet merged — see [PRD platform/0008](../action_plan/platform/0008-messaging-factory.md) and [PRD platform/0011](../action_plan/platform/0011-rubric-quick-wins.md#3-scope) ("out of scope: merging `feat/messaging-edge-wiring`"). That edge is marked dotted and annotated below rather than shown as working.
 
 ```mermaid
 flowchart TB
@@ -18,6 +18,7 @@ flowchart TB
     subgraph Base["terraform/app-base -- permanent, free"]
         VPC["VPC: 2 public subnets, no NAT gateway"]
         Cluster["ECS Fargate cluster"]
+        Mesh["Service Connect namespace (soa) + shared mesh SG"]
         CognitoPool["Cognito user pool + app client"]
         FrontendBucket["S3: SPA static website"]
         OrderTable[("DynamoDB soa-order")]
@@ -47,10 +48,16 @@ flowchart TB
     ALB --> ProductSvc
     ALB --> UserSvc
 
+    OrderSvc -- "GET /products/:id via ECS Service Connect, http://product:3000" --> ProductSvc
+
     OrderSvc --> OrderTable
     ProductSvc --> ProductTable
     UserSvc --> UserTable
     UserSvc -. "verify ID token against public JWKS" .-> CognitoPool
+
+    OrderSvc -.-> Mesh
+    ProductSvc -.-> Mesh
+    UserSvc -.-> Mesh
 
     UserSvc -. "sqs:SendMessage on first profile create -- pending app-edge wiring on feat/messaging-edge-wiring" .-> Queue
     Queue --> Worker
@@ -85,6 +92,8 @@ Each service gets its **own DynamoDB table(s)** — polyglot persistence, no sha
 
 This is built as a **paved-road module pattern**: a service is one `data` module block (its table) + one `ecs-service` module block (its ECR repo, task role, target group, listener rule, task definition, ECS service, autoscaling), on top of the shared `ecs-cluster` module (cluster + execution role + ALB security group) and `alb` module (the ALB + listener itself). As of [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) / [ADR 0003](decisions/0003-base-edge-split.md), the two module blocks for a given service **do not live in the same config** — see "Where this lives in Terraform" below. Two services now follow this pattern: `order` ([`services/order/`](../../services/order/)) was first, proving it end-to-end — a `data` table block in `app-base` and an `ecs-service` block in `app-edge` (ALB route `/orders*`, listener priority 100), deployed by the pipeline ([PRD order/0001](../action_plan/order/0001-service-scaffold.md), Done). `product` ([`services/product/`](../../services/product/)) is the second, the identical shape over a different entity (ALB route `/products*`, listener priority 110) — see [PRD product/0001](../action_plan/product/0001-service-scaffold.md) for its scope and current status. Copy either's shape for the next service (listener priority 120 is the next free value — check `terraform/app-edge/main.tf` for the current highest), and land a service's code and both of its Terraform blocks in one PR, per the lesson recorded in [order/0001's Outcome](../action_plan/order/0001-service-scaffold.md#deviation-from-plan--terraform-dropped-then-restored). See [operations/compute-layer.md](../operations/compute-layer.md) for how the cluster/roles/pipeline work, and [operations/adding-a-service.md](../operations/adding-a-service.md) for the recipe to add another service — concrete resource shapes and inputs live in [`terraform/modules/ecs-cluster/`](../../terraform/modules/ecs-cluster/), [`terraform/modules/alb/`](../../terraform/modules/alb/), [`terraform/modules/ecs-service/`](../../terraform/modules/ecs-service/), and [`terraform/modules/data/`](../../terraform/modules/data/), not restated here.
 
+**Internal service-to-service discovery** rides on top of the same cluster, per [PRD platform/0012](../action_plan/platform/0012-service-discovery.md) and [ADR 0006](decisions/0006-service-discovery.md): every `ecs-service` instance joins one shared **ECS Service Connect** HTTP namespace (`aws_service_discovery_http_namespace`, created once in `app-base` alongside the cluster), so a peer is reachable at a stable logical address — `http://<name>:3000` — instead of a churning task IP or a round-trip back out through the public ALB. Each task also carries one shared internal **mesh security group** (self-ingress only on the app port, also owned by `app-base`) in addition to its own ALB-scoped task SG, so any service can reach any other service on the mesh with no per-pair SG wiring as services are added — a deliberate uniformity-over-strict-least-privilege trade, bounded to the cluster's own tasks (see ADR 0006). The `order` service's product-existence check on order placement (below) is the concrete, demonstrating use of this.
+
 ## Async / event-driven
 
 The event-driven half of the hybrid architecture ([ADR 0001](decisions/0001-platform-and-compute-architecture.md)) is no longer aspirational — it's built: a reusable SQS (+ dead-letter queue) → Lambda → SNS "messaging factory" (`terraform/modules/messaging/`, `terraform/modules/lambda/`), wired once as a concrete notifications pipeline in **`app-base`** (permanent, free — same reasoning as the rest of `app-base`, see [ADR 0003](decisions/0003-base-edge-split.md)). Its first producer is the **user service**, which publishes a `UserProfileCreated` event to the queue on a user's first profile creation; the Lambda worker formats a welcome message and fans it out via SNS to a confirmed email subscription. See [operations/async-messaging.md](../operations/async-messaging.md) for the full shape, event contract, deploy path, and operating procedure, and [PRD platform/0008](../action_plan/platform/0008-messaging-factory.md) for the plan.
@@ -101,7 +110,7 @@ The SPA never hardcodes the backend's API URL. It fetches a runtime `/config.jso
 
 Two representative flows through the system above: a synchronous CRUD round-trip, and the asynchronous sign-up/notification path.
 
-**Sync: placing an order.** The SPA never talks to DynamoDB directly — every write goes through the owning service's own table, per the compute layer's polyglot-persistence rule.
+**Sync: placing an order.** The SPA never talks to DynamoDB directly — every write goes through the owning service's own table, per the compute layer's polyglot-persistence rule. Per [PRD platform/0012](../action_plan/platform/0012-service-discovery.md) / [ADR 0006](decisions/0006-service-discovery.md), order placement now also validates every line item against the product service over **ECS Service Connect** before saving — read-only, and fail-closed (`503`) if product is unreachable.
 
 ```mermaid
 sequenceDiagram
@@ -109,17 +118,28 @@ sequenceDiagram
     participant SPA as React SPA (S3)
     participant ALB as Shared ALB
     participant Order as order service (ECS Fargate)
+    participant Product as product service (ECS Fargate)
     participant DB as DynamoDB (soa-order)
 
     Shopper->>SPA: Open catalog, place an order
     SPA->>ALB: POST /orders {items, shippingAddress}
     ALB->>Order: forward (path rule /orders*)
     Order->>Order: validate body, compute total
-    Order->>DB: PutItem (order record)
-    DB-->>Order: 200 OK
-    Order-->>ALB: 201 Created + order
-    ALB-->>SPA: 201 Created + order
-    SPA-->>Shopper: Render order confirmation
+    Order->>Product: GET http://product:3000/products/:id (per item, via Service Connect)
+    alt product exists (200)
+        Product-->>Order: 200 OK
+        Order->>DB: PutItem (order record)
+        DB-->>Order: 200 OK
+        Order-->>ALB: 201 Created + order
+    else unknown productId (404)
+        Product-->>Order: 404 Not Found
+        Order-->>ALB: 400 Bad Request (unknown productId)
+    else product unreachable / 5xx (after Service Connect retries)
+        Product--xOrder: timeout / error
+        Order-->>ALB: 503 Service Unavailable (fail closed)
+    end
+    ALB-->>SPA: response (201 / 400 / 503)
+    SPA-->>Shopper: Render order confirmation or error
 ```
 
 **Async: sign-up to welcome email.** Registration and login are SPA-direct against Cognito (no hosted UI); the service itself never sees a password and never calls a Cognito API — it only verifies the ID token's signature against the pool's public JWKS. The last hop (user service → SQS) is annotated because it is not wired on `main` yet — see the note under "System diagram" above.
@@ -164,7 +184,7 @@ Because the ALB is recreated on every teardown/spin-up cycle (see "Where this li
 
 Per [ADR 0002](decisions/0002-terraform-configuration-topology.md) and refined by [ADR 0003](decisions/0003-base-edge-split.md), the network and compute layer are now split across **two** billable, pipeline-applied configs by lifecycle — not the single `terraform/app/` config ADR 0002 originally described (retired):
 
-- **`terraform/app-base/`** — the network, the ECS cluster, the shared execution role, the ALB security group, and **every service's DynamoDB table**. Free, permanent, never destroyed.
+- **`terraform/app-base/`** — the network, the ECS cluster, the shared execution role, the ALB security group, the Service Connect namespace + shared mesh security group ([ADR 0006](decisions/0006-service-discovery.md)), and **every service's DynamoDB table**. Free, permanent, never destroyed.
 - **`terraform/app-edge/`** — the ALB + HTTP listener, and every service's `ecs-service` module (compute). Destroyable, billable (~$16/mo ALB + Fargate task cost while running); this is what routine `terraform destroy` targets.
 
 Neither config is the human-applied identity foundation in `terraform/` root. See [PRD platform/0003](../action_plan/platform/0003-network.md) §5 and [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) §5 for the original resource-by-resource cost breakdowns, [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §5 for the split's cost table, and [operations/cost-lifecycle.md](../operations/cost-lifecycle.md) for the teardown/spin-up procedure.
@@ -176,11 +196,13 @@ Neither config is the human-applied identity foundation in `terraform/` root. Se
 - [ADR 0003 — Base/Edge Split](decisions/0003-base-edge-split.md) — why that billable config is itself split into a permanent `app-base` and a destroyable `app-edge`.
 - [ADR 0004 — Frontend Hosting](decisions/0004-frontend-hosting.md) — why the SPA is S3-hosted over HTTP with a runtime `config.json`, and why HTTPS is deferred (narrowed by ADR 0005 on Cognito auth).
 - [ADR 0005 — Cognito Auth, SPA-Direct, Over HTTP](decisions/0005-cognito-auth-over-http.md) — why application auth is SPA-direct Cognito over HTTPS APIs (no hosted UI), without waiting for the deferred HTTPS PRD.
+- [ADR 0006 — Service Discovery](decisions/0006-service-discovery.md) — why internal service-to-service calls use ECS Service Connect + a shared mesh security group, demonstrated by the order→product validation call.
 - [PRD platform/0003 — Network Foundation](../action_plan/platform/0003-network.md) — the plan and outcome for the network resources described above.
 - [PRD platform/0004 — ECS + ALB](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the compute layer and golden-path modules.
 - [PRD platform/0006 — Base/Edge Split](../action_plan/platform/0006-base-edge-split.md) — the plan and outcome for the base/edge split.
 - [PRD platform/0008 — Async Messaging Factory](../action_plan/platform/0008-messaging-factory.md) — the plan and outcome for the SQS → Lambda → SNS notification pipeline described above.
 - [PRD platform/0011 — Rubric Quick Wins](../action_plan/platform/0011-rubric-quick-wins.md) — the plan behind this doc's diagrams, the root `README.md`, the CI service-test step, and the CloudWatch alarms/cost budget.
+- [PRD platform/0012 — Service Discovery](../action_plan/platform/0012-service-discovery.md) — the plan and outcome for ECS Service Connect, the shared mesh security group, and the order→product validation call described above.
 - [PRD frontend/0001 — SPA Scaffold + S3 Hosting](../action_plan/frontend/0001-spa-scaffold-and-hosting.md) — the plan and outcome for the frontend described above.
 - [operations/compute-layer.md](../operations/compute-layer.md) — how the cluster, ALB, IAM roles, and pipeline deploy work.
 - [operations/async-messaging.md](../operations/async-messaging.md) — the async branch runbook: shape, event contract, deploy path, DLQ, manual gates.

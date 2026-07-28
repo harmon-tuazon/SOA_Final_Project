@@ -76,3 +76,13 @@ output "alerts_topic_arn" {
   description = "ARN of the ops-alerts SNS topic (PRD platform/0011). Read by app-edge via terraform_remote_state to use as an alarm_actions target for the ALB 5xx alarm and each service's ECS CPU-high alarm."
   value       = module.observability.alerts_topic_arn
 }
+
+output "service_connect_namespace_arn" {
+  description = "ARN of the Service Connect HTTP namespace (PRD platform/0012). Read by app-edge via terraform_remote_state; each ecs-service instance's service_connect_configuration joins this namespace."
+  value       = module.cluster.service_connect_namespace_arn
+}
+
+output "mesh_sg_id" {
+  description = "ID of the shared internal mesh security group (PRD platform/0012). Read by app-edge via terraform_remote_state; appended to every ecs-service instance's task security groups alongside its own ALB-scoped SG."
+  value       = module.cluster.mesh_sg_id
+}

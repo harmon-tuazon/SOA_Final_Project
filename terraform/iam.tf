@@ -292,6 +292,9 @@ data "aws_iam_policy_document" "deployer_permissions" {
       "cognito-idp:*",
       # Lambda: the async notification worker (PRD platform/0008).
       "lambda:*",
+      # Cloud Map / Service Discovery: the ECS Service Connect namespace
+      # (PRD platform/0012). CreateHttpNamespace + namespace refresh/tag reads.
+      "servicediscovery:*",
       # EC2 read-only discovery (VPCs, subnets, route tables, security
       # groups, AMIs, availability zones, etc.). Describe* actions do not
       # support resource-level restriction in IAM. ec2:GetSecurityGroupsForVpc

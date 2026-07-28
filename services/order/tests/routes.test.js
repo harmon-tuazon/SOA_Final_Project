@@ -60,8 +60,20 @@ function makeOrder(overrides = {}) {
   };
 }
 
+// POST /orders validates each line item against the product service before
+// saving. Tests below mock the global `fetch` the client defaults to, and
+// set PRODUCT_SERVICE_URL so the "not configured" branch is exercised only
+// where explicitly intended.
+const ORIGINAL_ENV = { ...process.env };
+
 beforeEach(() => {
   mockSend.mockReset();
+  process.env.PRODUCT_SERVICE_URL = 'http://product:3000';
+  global.fetch = jest.fn().mockResolvedValue({ status: 200 });
+});
+
+afterAll(() => {
+  process.env = ORIGINAL_ENV;
 });
 
 describe('GET /orders', () => {
@@ -196,6 +208,99 @@ describe('POST /orders', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/shippingAddress\.city/);
+  });
+});
+
+// --- Order -> product validation (PRD platform/0012: service discovery) ---
+
+describe('POST /orders product validation', () => {
+  it('calls the product service for each item and saves the order when all resolve 200', async () => {
+    mockSend.mockImplementation(async (command) => {
+      expect(command).toBeInstanceOf(PutCommand);
+      return {};
+    });
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBe(201);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://product:3000/products/p1',
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://product:3000/products/p2',
+      expect.objectContaining({ method: 'GET' })
+    );
+  });
+
+  it('rejects the order (4xx) when an item productId is unknown (404), and writes nothing', async () => {
+    global.fetch = jest.fn().mockImplementation(async (url) => {
+      if (url.endsWith('/products/p2')) return { status: 404 };
+      return { status: 200 };
+    });
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    expect(res.body.error).toMatch(/p2/);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with 503 when the product service returns 5xx, and writes nothing', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ status: 500 });
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBe(503);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with 503 when the product service is unreachable (network error), and writes nothing', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBe(503);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with 503 when the product service times out, and writes nothing', async () => {
+    global.fetch = jest.fn().mockImplementation(
+      (url, { signal }) =>
+        new Promise((resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        })
+    );
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBe(503);
+    expect(mockSend).not.toHaveBeenCalled();
+  }, 10000);
+
+  it('fails closed with 503 when PRODUCT_SERVICE_URL is not configured, and writes nothing', async () => {
+    delete process.env.PRODUCT_SERVICE_URL;
+
+    const res = await request(app).post('/orders').send(validCreateBody());
+
+    expect(res.status).toBe(503);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /health does not call the product service', () => {
+  it('returns 200 without invoking fetch', async () => {
+    const res = await request(app).get('/health');
+
+    expect(res.status).toBe(200);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

@@ -13,3 +13,4 @@ Architecture Decision Records — one immutable record per significant decision.
 | [0003 — Base/Edge Split](0003-base-edge-split.md) | Accepted |
 | [0004 — Frontend Hosting](0004-frontend-hosting.md) | Accepted — narrowed by 0005 |
 | [0005 — Cognito Auth, SPA-Direct, Over HTTP](0005-cognito-auth-over-http.md) | Accepted |
+| [0006 — Service Discovery](0006-service-discovery.md) | Accepted |
