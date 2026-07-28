@@ -4,9 +4,10 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
+- **Status:** Done <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
 - **Date:** 2026-07-24
 - **Approved:** 2026-07-24 by the repo owner ("start executing them all in the correct order")
+- **Completed:** 2026-07-28 (PRs #25/#27/#28; SQS→Lambda→SNS path deployed)
 - **Author:** Jean-Luc (with Claude Code)
 
 > Execution may only start once the user has confirmed **Approved**. The design below was settled via `/grill-me` on 2026-07-24.
@@ -359,4 +360,20 @@ Directly satisfies the async criteria: "asynchronous via a message queue (SQS/SN
 
 ## Outcome
 
-_Filled after execution: what actually happened, deviations from plan. Set status to Done._
+**Done — the async branch is built and deployed.** The full producer → SQS → Lambda → SNS path exists in `app-base` (free, permanent) and the user service publishes to it on first profile upsert. The only step outside code/infra is the one-time SNS email confirmation (§9.2), tracked as a to-do.
+
+**What landed** (PRs #25 messaging factory, #27, #28 edge-wiring):
+- **`terraform/modules/messaging/`** — `soa-notifications` SQS queue + `soa-notifications-dlq` (redrive `maxReceiveCount: 3`) + `soa-notifications` SNS topic + email subscription(s).
+- **`terraform/modules/lambda/`** — `soa-notification-worker` (Node 20), its `soa-*-exec` role carrying **`soa-boundary`** and scoped to the queue (`Receive`/`Delete`/`GetQueueAttributes`), the topic (`Publish`), and its own log group; an `aws_lambda_event_source_mapping` from the queue.
+- **`functions/notification-worker/`** — the handler (SQS event → format → `sns:Publish`), resilient to a malformed record, with tests.
+- **user service as producer:** publishes `UserProfileCreated` on first `GET /users/me` upsert; task role gained `sqs:SendMessage` scoped to the one queue ARN (via the new `ecs-service` `sqs_send_arns` input); `NOTIFICATIONS_QUEUE_URL` injected.
+- **CI/CD:** CI packages + tests `functions/*`; CD zips each function (SHA-tracked), applies, `aws lambda update-function-code`, and a smoke step publishes a synthetic event and asserts the invocation.
+- **Docs:** `docs/operations/async-messaging.md` runbook.
+
+**Deviations from plan:**
+1. **The deployer `lambda:*` grant forced a policy consolidation.** Adding a separate `LambdaManagement` statement would have pushed the deployer's permissions policy past IAM's 6144-char limit, so the wildcard service statements were consolidated into a single `GlobalServiceManagement` (identical permissions, verified by `infra-reviewer`) with `lambda:*` added there. Still the only root-identity change, still admin-applied out-of-band ([to-do](../../to-dos/admin-apply-lambda-grant.md), now Done).
+2. **Multi-recipient email.** The demo needed **two** notification addresses, so `NOTIFICATION_EMAIL` is comma-separated and the `messaging` module was extended to split it and create one `aws_sns_topic_subscription` per address (`for_each`) — a small superset of the single-subscription §5.1 spec.
+
+**Verification:** function + user-service unit tests green; `plan` showed the queue/DLQ/topic/subscription/Lambda/exec-role/mapping as creates, 0 destroys; the exec role is boundary-carrying and triple-scoped (no wildcard); the user task policy gained only the scoped `sqs:SendMessage`. The SQS→Lambda→SNS half is provable via the worker's CloudWatch Logs (CD smoke send).
+
+**Still tracked out-of-band (the final email hop):** both SNS email subscriptions are `PendingConfirmation` until someone clicks the AWS confirmation link — [`docs/to-dos/confirm-sns-subscription.md`](../../to-dos/confirm-sns-subscription.md). Until then, delivery to the inbox doesn't happen, but the rest of the path runs and is observable in logs. Order-confirmation email remains a future `order/0002` reusing this factory unchanged.

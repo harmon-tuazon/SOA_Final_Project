@@ -4,9 +4,10 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
+- **Status:** Done <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
 - **Date:** 2026-07-23
 - **Approved:** 2026-07-24 by the repo owner ("start executing them all in the correct order")
+- **Completed:** 2026-07-28 (deployed; live on the ALB, auth-enforced)
 - **Author:** Jean-Luc (with Claude Code)
 
 > Execution may only start once the user has confirmed **Approved**. The design below was settled via `/grill-me` on 2026-07-23.
@@ -338,4 +339,18 @@ Satisfies "**User Service:** Handles user registration, authentication, and prof
 
 ## Outcome
 
-_Filled after execution: what actually happened, deviations from plan. Set status to Done._
+**Done — deployed, live on the ALB, and enforcing auth.** `services/user` runs on the cluster behind `/users*`; the SPA's real register → confirm → sign-in → profile/billing flow works against it.
+
+**What landed:**
+- `services/user/` — Express service with **Cognito ID-token verification** (`aws-jwt-verify` against the pool's public JWKS; no secret, no IAM call), the profile + billing routes of §3.2 keyed strictly on the token `sub`, the **PAN/CVV guard** (§3.3, rejects card data with 400 before any write or log), and env-driven CORS. Tests cover health/no-token, the token cases (valid/expired/wrong-audience/missing), the profile lazy-create, the billing round-trip, and every PAN/CVV rejection — all with no AWS.
+- **Terraform:** `module "user_table"` in `app-base` (hash key `userId`, permanent) and `module "user_service"` in `app-edge` at **listener priority 120**, task role boundary-scoped to `soa-user` only.
+- **Frontend:** the auth stub replaced with real Cognito session state (`amazon-cognito-identity-js`), register/confirm/login screens, a gating `ProtectedRoute`, the `Authorization: Bearer` header on API calls, and profile + billing pages.
+
+**Deviations from plan:**
+1. **Listener priority 110 → 120** — `product/0001` merged first and took 110 (already captured in the §1 amendment).
+2. **CORS `Access-Control-Allow-Headers` needed `authorization`.** §5.1 correctly predicted that the `Authorization` header makes every call preflighted; the concrete requirement — listing `authorization` (not just `content-type`) in the allowed headers — was set here from the start, and the same fix was later applied to `order`/`product` (PR #32) when a teammate hit it. The user service shipped correct.
+3. The **notifications producer** (publish `UserProfileCreated` on first upsert) was wired by [`platform/0008`](../platform/0008-messaging-factory.md)'s edge half, as that PRD's §3 always intended — not by this PRD.
+
+**Verification:** `npm test` green with no AWS; non-root image; no hardcoded endpoints (CI grep clean); `plan` creates with 0 destroys; and live, `GET /users/me` returns **401** without a token and **200** with a valid ID token — proving the route is live *and* enforcing auth. The known open gap (order service still unauthenticated, §9.2) remains a deliberate future `order/0002`.
+
+**Still tracked out-of-band:** the demo account — [`docs/to-dos/create-demo-cognito-account.md`](../../to-dos/create-demo-cognito-account.md).
