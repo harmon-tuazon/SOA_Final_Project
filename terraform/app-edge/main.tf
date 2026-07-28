@@ -66,6 +66,16 @@ locals {
   # task role's SendMessage permission to this queue only.
   notifications_queue_url = data.terraform_remote_state.base.outputs.notifications_queue_url
   notifications_queue_arn = data.terraform_remote_state.base.outputs.notifications_queue_arn
+
+  # Service Connect namespace + shared mesh SG (PRD platform/0012), owned by
+  # app-base's ecs-cluster module. try(...) so this config still plans before
+  # app-base has applied the new outputs (e.g. this PR's CI edge-plan) — same
+  # pattern as alerts_topic_arn above: empty/null -> every ecs-service
+  # instance's dynamic service_connect_configuration/mesh SG simply isn't
+  # configured, so validate/plan still succeed, and the real values resolve
+  # once CD applies app-base first, then this config, on merge.
+  service_connect_namespace_arn = try(data.terraform_remote_state.base.outputs.service_connect_namespace_arn, "")
+  mesh_sg_id                    = try(data.terraform_remote_state.base.outputs.mesh_sg_id, "")
 }
 
 # --- Shared edge: ALB + HTTP listener (the only billable resource this
@@ -112,6 +122,8 @@ module "alb" {
 #   execution_role_arn  = local.execution_role_arn
 #   boundary_arn        = local.boundary_arn
 #   alerts_topic_arn    = local.alerts_topic_arn
+#   service_connect_namespace_arn = local.service_connect_namespace_arn
+#   mesh_sg_id                    = local.mesh_sg_id
 # }
 
 # order service (PRD order/0001) — the first service on the shared listener,
@@ -121,23 +133,32 @@ module "alb" {
 module "order_service" {
   source = "../modules/ecs-service"
 
-  name_prefix        = var.name_prefix
-  region             = var.region
-  name               = "order"
-  port               = 3000
-  image_tag          = var.image_tag
-  route              = "/orders*"
-  priority           = 100
-  env                = { ORDER_TABLE = "${var.name_prefix}-order" }
-  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-order"]
-  vpc_id             = local.vpc_id
-  public_subnet_ids  = local.public_subnet_ids
-  cluster_id         = local.cluster_id
-  alb_sg_id          = local.alb_sg_id
-  listener_arn       = module.alb.listener_arn
-  execution_role_arn = local.execution_role_arn
-  boundary_arn       = local.boundary_arn
-  alerts_topic_arn   = local.alerts_topic_arn
+  name_prefix = var.name_prefix
+  region      = var.region
+  name        = "order"
+  port        = 3000
+  image_tag   = var.image_tag
+  route       = "/orders*"
+  priority    = 100
+  env = {
+    ORDER_TABLE = "${var.name_prefix}-order"
+    # Product-existence check on order placement (PRD platform/0012): a
+    # stable Service-Connect logical address, not a literal external
+    # endpoint or the churning ALB DNS — read by the app from env, never
+    # hardcoded in source (service-contract.md).
+    PRODUCT_SERVICE_URL = "http://product:3000"
+  }
+  table_arns                    = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-order"]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
 }
 
 # product service (PRD product/0001) — the second service on the shared
@@ -148,23 +169,25 @@ module "order_service" {
 module "product_service" {
   source = "../modules/ecs-service"
 
-  name_prefix        = var.name_prefix
-  region             = var.region
-  name               = "product"
-  port               = 3000
-  image_tag          = var.image_tag
-  route              = "/products*"
-  priority           = 110
-  env                = { PRODUCT_TABLE = "${var.name_prefix}-product" }
-  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
-  vpc_id             = local.vpc_id
-  public_subnet_ids  = local.public_subnet_ids
-  cluster_id         = local.cluster_id
-  alb_sg_id          = local.alb_sg_id
-  listener_arn       = module.alb.listener_arn
-  execution_role_arn = local.execution_role_arn
-  boundary_arn       = local.boundary_arn
-  alerts_topic_arn   = local.alerts_topic_arn
+  name_prefix                   = var.name_prefix
+  region                        = var.region
+  name                          = "product"
+  port                          = 3000
+  image_tag                     = var.image_tag
+  route                         = "/products*"
+  priority                      = 110
+  env                           = { PRODUCT_TABLE = "${var.name_prefix}-product" }
+  table_arns                    = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
 }
 
 # user service (PRD user/0001); priority 120 (order holds 100, product holds
@@ -193,13 +216,15 @@ module "user_service" {
   table_arns = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-user"]
   # First producer on the async branch (PRD platform/0008) — fire-and-forget
   # publish on first profile creation; scoped to this queue only.
-  sqs_send_arns      = [local.notifications_queue_arn]
-  vpc_id             = local.vpc_id
-  public_subnet_ids  = local.public_subnet_ids
-  cluster_id         = local.cluster_id
-  alb_sg_id          = local.alb_sg_id
-  listener_arn       = module.alb.listener_arn
-  execution_role_arn = local.execution_role_arn
-  boundary_arn       = local.boundary_arn
-  alerts_topic_arn   = local.alerts_topic_arn
+  sqs_send_arns                 = [local.notifications_queue_arn]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
 }

@@ -8,13 +8,29 @@ Worked skeleton: [`services/_template/`](../../services/_template/) (never deplo
 
 Every service under `services/<name>/` follows the same shape — the full, binding rule is [`.claude/rules/service-contract.md`](../../.claude/rules/service-contract.md); summarized here:
 
-- **Reads all config from the environment** — table name, port, etc. — never hardcoded and never read from a committed file. **This includes API base URLs**: never hardcode the ALB's DNS name — it changes every time `app-edge` is torn down and recreated (see [ADR 0003](../architecture/decisions/0003-base-edge-split.md)) — read it from config/env instead. Secrets (if a service ever needs one) come from SSM/Secrets Manager at runtime, not from Terraform `env` vars (see `modules/ecs-service` `env` input — plain, non-secret values only).
+- **Reads all config from the environment** — table name, port, etc. — never hardcoded and never read from a committed file. **This includes API base URLs**: never hardcode the ALB's DNS name — it changes every time `app-edge` is torn down and recreated (see [ADR 0003](../architecture/decisions/0003-base-edge-split.md)) — read it from config/env instead. This rule applies equally to a **peer service's** address (see "Service Connect by default" below): read it from an injected env var, never a literal `http://<name>:3000` in source. Secrets (if a service ever needs one) come from SSM/Secrets Manager at runtime, not from Terraform `env` vars (see `modules/ecs-service` `env` input — plain, non-secret values only).
 - **Exposes `GET /health`**, fast and free of any DynamoDB (or other dependency) call, returning `200` as long as the process is up. This is the ALB target group's health check, not a general readiness check — see [`services/_template/src/app.js`](../../services/_template/src/app.js).
 - **Standard Dockerfile shape** — small base image (`node:20-alpine` in the template), multi-stage/`npm ci --omit=dev` for a lean image, runs as a **non-root user** (`USER node`), exposes the app's port. See [`services/_template/Dockerfile`](../../services/_template/Dockerfile).
 - **Own DynamoDB table(s) only** — no shared database between services (polyglot persistence, per ADR 0001). The service reads its table name from an env var the Terraform wiring supplies (e.g. `<NAME>_TABLE`), never a hardcoded table name.
 - **Tests** live alongside the source (`services/<name>/tests/`) and run via the service's own `npm test`; add a local `docker-compose.yml` block for local dev against DynamoDB Local.
 
 `/health` is the **internal** ALB target-group health-check path — it is not routed externally by the shared listener unless the service's own listener rule also matches it (see [compute-layer.md §6](compute-layer.md#6-health-is-not-externally-routed)). A service's actual route (e.g. `/orders*`) is a separate, explicit choice.
+
+### Service Connect by default
+
+Every service scaffolded onto the `ecs-service` module is **Service-Connect-enabled with no opt-in** ([PRD platform/0012](../action_plan/platform/0012-service-discovery.md), [ADR 0006](../architecture/decisions/0006-service-discovery.md)): its `aws_ecs_service` joins the shared `soa` HTTP namespace (owned by `app-base`, alongside the cluster) and advertises its app port under its own logical name. That means a new service is discoverable at `http://<name>:3000` from any other service the moment it deploys — no per-service Terraform toggle, no extra module input. It also automatically attaches the shared internal **mesh security group** (`app-base`, self-ingress only on port 3000) alongside its own ALB-scoped task security group, so it can be reached by (and can reach) any other service on the mesh — again, nothing to configure per service.
+
+**Adding an inter-service call** (a service that needs to talk to another service, the way `order` calls `product` to validate a `productId` on order placement):
+
+1. **Inject the peer's URL as env**, in the *caller's* `ecs-service` module block in `terraform/app-edge/main.tf` — a plain `env` entry pointing at the peer's Service Connect logical name, e.g.:
+   ```hcl
+   env = {
+     PRODUCT_SERVICE_URL = "http://product:3000"
+   }
+   ```
+   Never hardcode `http://product:3000` (or any peer address) in application source — inject it as env from the Terraform wiring and read it via `process.env.*`, per the no-hardcoded-endpoint rule above and [`service-contract.md`](../../.claude/rules/service-contract.md). See [`services/order/src/productClient.js`](../../services/order/src/productClient.js) for the worked reference: it reads `PRODUCT_SERVICE_URL` from env, calls `GET {baseUrl}/products/:id` with a short timeout, and fails closed (`503`) if the peer is unreachable rather than assuming success.
+2. **No SG or namespace change is needed on either side** — both services already carry the mesh SG and already joined the namespace by default, per the paragraph above. Only the env var (and the calling code) are new.
+3. **Design the call to fail closed, not silently.** Service Connect's Envoy sidecar retries at the network layer, but the app should still set an upper-bound timeout and treat "peer unreachable / errored" as a deliberate failure response (e.g. `503`), not as "assume the peer would have said yes."
 
 ## 2. Two ways to add a service
 
@@ -106,6 +122,8 @@ If the new resource types the service needs (a new AWS service integration, not 
 - [cicd-pipeline.md](cicd-pipeline.md) — the workflows this flow runs through.
 - [cost-lifecycle.md](cost-lifecycle.md) — how a service's table survives teardown while its compute doesn't.
 - [ADR 0003](../architecture/decisions/0003-base-edge-split.md) — why a service is declared across two configs, and the self-serve/deny-delete table posture.
+- [ADR 0006](../architecture/decisions/0006-service-discovery.md) — why every service gets ECS Service Connect + the shared mesh security group by default, and the order→product call that demonstrates it.
+- [PRD platform/0012](../action_plan/platform/0012-service-discovery.md) — the plan and outcome for Service Connect, the mesh SG, and the order→product call.
 - [PRD platform/0004](../action_plan/platform/0004-ecs-alb.md) — the PRD that built the compute layer and modules this recipe wires into.
 - [PRD platform/0005](../action_plan/platform/0005-service-factory.md) — the PRD that extracted `_template`, wrote the service contract, built `/new-service`, and generalized the pipeline over `services/*`.
 - [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) — the PRD that split the recipe across `app-base`/`app-edge` and made tables self-serve.

@@ -135,3 +135,54 @@ resource "aws_iam_role_policy_attachment" "execution" {
   role       = aws_iam_role.execution.name
   policy_arn = aws_iam_policy.execution.arn
 }
+
+# --- Service Connect namespace (PRD platform/0012) --------------------------
+#
+# HTTP Cloud Map namespace every service's ecs-service instance joins via
+# `service_connect_configuration`, so tasks reach each other by a stable
+# logical name (e.g. http://product:3000) instead of a churning task IP or
+# the public ALB. Free — an HTTP namespace and Service Connect carry no
+# separate AWS charge (only the small task cpu/mem the injected Envoy
+# sidecar consumes, sized via ecs-service's cpu/memory variables). Lives
+# here (app-base) so the namespace survives every app-edge teardown/recreate
+# — app-edge's services join it via terraform_remote_state, they never
+# create it.
+resource "aws_service_discovery_http_namespace" "this" {
+  name        = var.name_prefix
+  description = "Service Connect namespace for internal service-to-service discovery (PRD platform/0012)."
+}
+
+# --- Shared internal "mesh" security group (PRD platform/0012) --------------
+#
+# Every service's task attaches this SG in ADDITION to its own ALB-scoped
+# task SG (modules/ecs-service keeps that unchanged). It trusts only ITSELF
+# (self = true) on the app port, so any task carrying this SG can reach any
+# other task carrying it with no per-pair wiring as services are added — the
+# mesh only ever admits traffic already inside the cluster's own tasks; the
+# public/ALB ingress path is untouched. Lives here (app-base) so it is
+# created once and survives every app-edge teardown/recreate.
+resource "aws_security_group" "mesh" {
+  name        = "${var.name_prefix}-mesh"
+  description = "Shared internal security group for service-to-service (Service Connect) traffic: trusts only its own members on the app port."
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "App port from other tasks carrying this same security group (self-referencing, not open to the internet or the ALB path)"
+    from_port   = var.mesh_port
+    to_port     = var.mesh_port
+    protocol    = "tcp"
+    self        = true
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-mesh"
+  }
+}

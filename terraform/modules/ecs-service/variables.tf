@@ -27,9 +27,9 @@ variable "cpu" {
 }
 
 variable "memory" {
-  description = "Fargate task memory in MiB."
+  description = "Fargate task memory in MiB. Bumped from the original 512 default (PRD platform/0012): Service Connect injects an Envoy sidecar into every task, and 512 MiB was tight for the Node app plus that sidecar. 1024 stays within cpu=256's valid Fargate memory range (512/1024/2048) and costs roughly $1-2/mo more per always-on service on Fargate Spot (~$5/mo on-demand) for the extra 0.5 GiB."
   type        = number
-  default     = 512
+  default     = 1024
 }
 
 variable "image_tag" {
@@ -120,6 +120,18 @@ variable "use_fargate_spot" {
 
 variable "alerts_topic_arn" {
   description = "ARN of the ops-alerts SNS topic (PRD platform/0011), read by the app-edge root from app-base via terraform_remote_state. Used as the alarm_actions target for this service's CPU-high alarm. Empty (the default) creates no alarm, so a service without it still works — e.g. before app-base's observability module/output exists."
+  type        = string
+  default     = ""
+}
+
+variable "service_connect_namespace_arn" {
+  description = "ARN of the Service Connect HTTP namespace (PRD platform/0012), read by the app-edge root from app-base via terraform_remote_state. When set, this service joins the namespace under its own logical name (var.name) so peers can call it at http://<name>:<port>. Empty (the default) disables Service Connect for this instance, so validate still passes before app-base's namespace/output exists."
+  type        = string
+  default     = ""
+}
+
+variable "mesh_sg_id" {
+  description = "ID of the shared internal mesh security group (PRD platform/0012), read by the app-edge root from app-base via terraform_remote_state. Appended to this service's task security groups alongside its own ALB-scoped SG so it can reach (and be reached by) other mesh members on the app port. Empty (the default) attaches no mesh SG, so validate still passes before app-base's mesh SG/output exists."
   type        = string
   default     = ""
 }

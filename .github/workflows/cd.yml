@@ -213,6 +213,100 @@ jobs:
             echo "::endgroup::"
           done
 
+      # --- Smoke-test the sync path (order -> product via Service Connect) -
+      # Proves ECS Service Connect end to end (PRD platform/0012 §4.8/§8):
+      # the order service's POST /orders is supposed to reach the product
+      # service over the internal `http://product:3000` logical name (never
+      # a hardcoded endpoint, injected as PRODUCT_SERVICE_URL) to validate
+      # each line item's product id before saving the order. Neither
+      # services/order/src/app.js nor services/product/src/app.js has an
+      # auth gate (CORS only, no Cognito check on these two routes — unlike
+      # the user service), so this is a plain curl round trip through the
+      # live ALB with no token to mint.
+      #
+      # Seed one product, then place two orders against it:
+      #   - a REAL product id  -> order's product lookup succeeds (200 from
+      #     product) -> order is saved -> 2xx
+      #   - a BOGUS product id -> order's product lookup 404s -> order is
+      #     rejected -> 4xx
+      # The bogus-order assertion is what actually proves the inter-service
+      # call happened: services/order/src/orders.js's own request-body
+      # validation only checks that productId is a non-empty string — it has
+      # no idea whether the id is real. A 4xx here can only come from order
+      # having called out to product over Service Connect and gotten a 404
+      # back; if that call weren't happening (or weren't enforced), this
+      # request would 2xx same as the valid one.
+      - name: Smoke-test the sync path (order -> product via Service Connect)
+        run: |
+          set -euo pipefail
+
+          ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
+          BASE="http://$ALB"
+
+          echo "::group::seed a product"
+          PRODUCT_BODY=$(jq -n '{name:"CD Smoke Test Product",price:9.99,category:"cd-smoke-test"}')
+          product_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/products" \
+            -H 'Content-Type: application/json' -d "$PRODUCT_BODY")
+          product_status=$(echo "$product_response" | tail -n1)
+          product_body=$(echo "$product_response" | sed '$d')
+          echo "POST /products -> $product_status"
+
+          if [ "$product_status" != "201" ]; then
+            echo "::error::Seeding the smoke-test product failed (HTTP $product_status): $product_body"
+            exit 1
+          fi
+
+          PRODUCT_ID=$(echo "$product_body" | jq -r '.id')
+          echo "seeded product id: $PRODUCT_ID"
+          echo "::endgroup::"
+
+          SHIPPING='{"line1":"1 Main St","city":"Testville","postalCode":"00000","country":"US"}'
+
+          echo "::group::place a valid order (real product id -> expect 2xx)"
+          valid_body=$(jq -n --arg pid "$PRODUCT_ID" --argjson addr "$SHIPPING" \
+            '{customerId:"cd-smoke-test",items:[{productId:$pid,name:"CD Smoke Test Product",unitPrice:9.99,qty:1}],shippingAddress:$addr}')
+          valid_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/orders" \
+            -H 'Content-Type: application/json' -d "$valid_body")
+          valid_status=$(echo "$valid_response" | tail -n1)
+          valid_resp_body=$(echo "$valid_response" | sed '$d')
+          echo "POST /orders (real product) -> $valid_status"
+          echo "::endgroup::"
+
+          echo "::group::place a bogus order (nonexistent product id -> expect 4xx)"
+          bogus_body=$(jq -n --argjson addr "$SHIPPING" \
+            '{customerId:"cd-smoke-test",items:[{productId:"00000000-0000-0000-0000-000000000000",name:"CD Smoke Test Product",unitPrice:9.99,qty:1}],shippingAddress:$addr}')
+          bogus_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/orders" \
+            -H 'Content-Type: application/json' -d "$bogus_body")
+          bogus_status=$(echo "$bogus_response" | tail -n1)
+          bogus_resp_body=$(echo "$bogus_response" | sed '$d')
+          echo "POST /orders (bogus product) -> $bogus_status"
+          echo "::endgroup::"
+
+          # Cleanup: DELETE /products/:id exists and is trivial to call, so
+          # remove the seeded product. There is no DELETE /orders/:id route
+          # in the order-service contract, so the two orders created above
+          # stay in DynamoDB — acceptable demo test data per the PRD.
+          echo "::group::cleanup: delete the seeded product"
+          delete_status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/products/$PRODUCT_ID")
+          echo "DELETE /products/$PRODUCT_ID -> $delete_status"
+          echo "::endgroup::"
+
+          failed=""
+          if [ "${valid_status:0:1}" != "2" ]; then
+            echo "::error::Valid order for a real seeded product ($PRODUCT_ID) returned HTTP $valid_status (expected 2xx): $valid_resp_body"
+            failed="1"
+          fi
+          if [ "${bogus_status:0:1}" != "4" ]; then
+            echo "::error::Order for a nonexistent product id returned HTTP $bogus_status (expected 4xx): $bogus_resp_body -- this is the assertion proving order actually calls product over Service Connect (http://product:3000); anything other than 4xx means the inter-service validation call didn't happen or isn't enforced."
+            failed="1"
+          fi
+
+          if [ -n "$failed" ]; then
+            exit 1
+          fi
+
+          echo "Sync smoke test passed: order -> product Service Connect call proven (valid order=$valid_status, bogus order=$bogus_status)."
+
       # --- Smoke-test the async path (SQS -> Lambda) -----------------------
       # Proves the SQS->Lambda half of the notification pipeline end to end
       # on every deploy (PRD platform/0008 §4.8): publish one synthetic

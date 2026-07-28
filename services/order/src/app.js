@@ -15,6 +15,8 @@ const {
   buildOrderFromInput,
 } = require('./orders');
 
+const { validateItemsAgainstProductService } = require('./productClient');
+
 // Table name is read from the environment — never hardcoded. In app-edge
 // this is injected as ORDER_TABLE (the seam described in the service
 // contract); locally it comes from docker-compose.
@@ -122,11 +124,21 @@ app.get('/orders/:id', async (req, res) => {
 
 // POST /orders — create. Server derives id/total/status/placedAt/
 // deliveryEstimate/updatedAt; any client-supplied values for those fields
-// are ignored, never trusted (see buildOrderFromInput in ./orders).
+// are ignored, never trusted (see buildOrderFromInput in ./orders). Before
+// saving, every line item's productId is validated against the product
+// service over Service Connect (read-only — no stock write); see
+// docs/action_plan/platform/0012-service-discovery.md.
 app.post('/orders', async (req, res) => {
   const validationError = validateCreateOrderInput(req.body);
   if (validationError) {
     return res.status(400).json({ error: validationError });
+  }
+
+  const productValidationError = await validateItemsAgainstProductService(req.body.items);
+  if (productValidationError) {
+    return res
+      .status(productValidationError.status)
+      .json({ error: productValidationError.error });
   }
 
   const order = buildOrderFromInput(req.body);

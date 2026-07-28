@@ -211,6 +211,7 @@ resource "aws_ecs_task_definition" "this" {
 
       portMappings = [
         {
+          name          = var.name # named port required by Service Connect (PRD platform/0012); referenced as port_name below
           containerPort = var.port
           protocol      = "tcp"
         }
@@ -254,8 +255,13 @@ resource "aws_ecs_service" "this" {
   }
 
   network_configuration {
-    subnets          = var.public_subnet_ids
-    security_groups  = [aws_security_group.task.id]
+    subnets = var.public_subnet_ids
+    # Each task keeps its own ALB-scoped task SG (public ingress path,
+    # unchanged) and, when mesh_sg_id is set, ALSO carries the shared mesh SG
+    # (PRD platform/0012) so it can reach and be reached by other services'
+    # tasks over Service Connect. compact() drops the empty-string default so
+    # this still plans before app-base's mesh SG output exists.
+    security_groups  = compact([aws_security_group.task.id, var.mesh_sg_id])
     assign_public_ip = true # no NAT gateway in this design; tasks need a public IP to pull from ECR
   }
 
@@ -263,6 +269,32 @@ resource "aws_ecs_service" "this" {
     target_group_arn = aws_lb_target_group.this.arn
     container_name   = var.name
     container_port   = var.port
+  }
+
+  # Service Connect (PRD platform/0012): joins the shared "soa" HTTP
+  # namespace and advertises this service's app port under its own logical
+  # name, so peers call it at http://<name>:<port> instead of a churning
+  # task IP or the public ALB. Enabled uniformly for every service (no
+  # toggle) once app-base's namespace is available; the dynamic block with an
+  # empty-string default lets this module still validate/plan before that
+  # namespace exists.
+  dynamic "service_connect_configuration" {
+    for_each = var.service_connect_namespace_arn != "" ? [1] : []
+
+    content {
+      enabled   = true
+      namespace = var.service_connect_namespace_arn
+
+      service {
+        port_name      = var.name
+        discovery_name = var.name
+
+        client_alias {
+          port     = var.port
+          dns_name = var.name
+        }
+      }
+    }
   }
 
   depends_on = [aws_lb_listener_rule.this]
