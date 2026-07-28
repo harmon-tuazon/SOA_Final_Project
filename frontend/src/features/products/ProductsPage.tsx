@@ -2,11 +2,12 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { errorMessage } from '../../lib/api';
 import { formatMoney, useCreateProduct, useProducts, type CreateProductInput } from './api';
+import { StockBadge, Stars } from './ui';
 
 // Product catalog — the "search results" half of an Amazon-style storefront:
 // a category dropdown + keyword search that drive server-side filtering
-// (?category=, ?q=), a grid of products linking into the detail page, and a
-// create form.
+// (?category=, ?q=), a grid of product cards linking into the detail page,
+// and a collapsed create form.
 //
 // Like every page here it must handle the "backend unavailable" state
 // gracefully: the product service may not be deployed yet.
@@ -43,14 +44,17 @@ export function ProductsPage() {
   const [imageUrl, setImageUrl] = useState('');
   const [stock, setStock] = useState('');
 
+  const isFiltered = Boolean(category || q);
+
   function handleSearchSubmit(e: FormEvent) {
     e.preventDefault();
     setQ(searchInput.trim());
   }
 
-  function handleClearSearch() {
+  function handleClearFilters() {
     setSearchInput('');
     setQ('');
+    setCategory('');
   }
 
   function handleCreateSubmit(e: FormEvent) {
@@ -92,11 +96,20 @@ export function ProductsPage() {
 
   return (
     <section>
-      <h1>Products</h1>
+      <div className="page-head">
+        <h1>Products</h1>
+        {!isLoading && !isError && products && (
+          <span className="result-count">
+            {products.length} {products.length === 1 ? 'result' : 'results'}
+            {category ? ` in ${category}` : ''}
+            {q ? ` for “${q}”` : ''}
+          </span>
+        )}
+      </div>
 
-      <p>
-        <label>
-          Category{' '}
+      <form className="toolbar" onSubmit={handleSearchSubmit}>
+        <label className="field">
+          <span>Category</span>
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">All categories</option>
             {categories.map((c) => (
@@ -106,21 +119,20 @@ export function ProductsPage() {
             ))}
           </select>
         </label>
-      </p>
 
-      <form onSubmit={handleSearchSubmit}>
-        <label>
-          Search{' '}
+        <label className="field field--grow">
+          <span>Search</span>
           <input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search name or description"
           />
-        </label>{' '}
-        <button type="submit">Search</button>{' '}
-        {q && (
-          <button type="button" onClick={handleClearSearch}>
-            Clear search
+        </label>
+
+        <button type="submit">Search</button>
+        {isFiltered && (
+          <button type="button" onClick={handleClearFilters}>
+            Clear
           </button>
         )}
       </form>
@@ -135,105 +147,118 @@ export function ProductsPage() {
       )}
 
       {!isLoading && !isError && products && products.length === 0 && (
-        <p>No products found.</p>
+        <p>
+          No products found.{' '}
+          {isFiltered && (
+            <button type="button" onClick={handleClearFilters}>
+              Clear filters
+            </button>
+          )}
+        </p>
       )}
 
       {!isLoading && !isError && products && products.length > 0 && (
-        <ul>
+        <ul className="product-grid">
           {products.map((product) => (
             <li key={product.id}>
-              <article>
-                <h2>
-                  <Link to={`/products/${product.id}`}>{product.name}</Link>
-                </h2>
+              <article className="product-card">
+                <Link to={`/products/${product.id}`} className="product-card__media">
+                  {product.imageUrl ? (
+                    <img src={product.imageUrl} alt="" loading="lazy" />
+                  ) : (
+                    <span className="product-card__media--empty">No image</span>
+                  )}
+                </Link>
 
-                {product.imageUrl ? (
-                  <img src={product.imageUrl} alt={product.name} width={120} />
-                ) : (
-                  <p>No image</p>
-                )}
+                <div className="product-card__body">
+                  <h2 className="product-card__title">
+                    <Link to={`/products/${product.id}`}>{product.name}</Link>
+                  </h2>
 
-                <dl>
-                  <dt>Price</dt>
-                  <dd>{formatMoney(product.price)}</dd>
-                  <dt>Category</dt>
-                  <dd>{product.category}</dd>
-                  <dt>Rating</dt>
-                  <dd>{product.rating.toFixed(1)} / 5</dd>
-                  <dt>Stock</dt>
-                  <dd>{product.stock === 0 ? 'Out of stock' : product.stock}</dd>
-                </dl>
+                  <Stars rating={product.rating} />
 
-                <p>
-                  <Link to={`/products/${product.id}`}>View details</Link>
-                </p>
+                  <p className="product-card__price">{formatMoney(product.price)}</p>
+
+                  <div className="product-card__meta">
+                    <span>{product.category}</span>
+                    <StockBadge stock={product.stock} />
+                  </div>
+                </div>
               </article>
             </li>
           ))}
         </ul>
       )}
 
-      <form onSubmit={handleCreateSubmit}>
-        <h2>Create product</h2>
-        <label>
-          Name
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Widget" />
-        </label>
-        <label>
-          Description
-          <input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Optional"
-          />
-        </label>
-        <label>
-          Price
-          <input
-            type="number"
-            step="0.01"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            placeholder="9.99"
-          />
-        </label>
-        <label>
-          Category
-          <input
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value)}
-            placeholder="Electronics"
-          />
-        </label>
-        <label>
-          Image URL
-          <input
-            value={imageUrl}
-            onChange={(e) => setImageUrl(e.target.value)}
-            placeholder="https://…"
-          />
-        </label>
-        <label>
-          Stock
-          <input
-            type="number"
-            step="1"
-            value={stock}
-            onChange={(e) => setStock(e.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <button type="submit" disabled={createProduct.isPending}>
-          {createProduct.isPending ? 'Creating…' : 'Create'}
-        </button>
+      <details className="disclosure">
+        <summary>Add a product</summary>
+        <form onSubmit={handleCreateSubmit}>
+          <div className="form-grid">
+            <label className="field">
+              <span>Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Widget" />
+            </label>
+            <label className="field">
+              <span>Category</span>
+              <input
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value)}
+                placeholder="Electronics"
+              />
+            </label>
+            <label className="field">
+              <span>Price</span>
+              <input
+                type="number"
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="9.99"
+              />
+            </label>
+            <label className="field">
+              <span>Stock</span>
+              <input
+                type="number"
+                step="1"
+                value={stock}
+                onChange={(e) => setStock(e.target.value)}
+                placeholder="0"
+              />
+            </label>
+            <label className="field form-grid--wide">
+              <span>Image URL</span>
+              <input
+                value={imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+                placeholder="https://…"
+              />
+            </label>
+            <label className="field form-grid--wide">
+              <span>Description</span>
+              <textarea
+                rows={2}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
 
-        {createProduct.isError && (
-          <p role="status">
-            <strong>Could not create product.</strong>{' '}
-            {errorMessage(createProduct.error)}
-          </p>
-        )}
-      </form>
+          <div className="form-actions">
+            <button type="submit" disabled={createProduct.isPending}>
+              {createProduct.isPending ? 'Creating…' : 'Create product'}
+            </button>
+            <span className="subtle">Rating starts at 0 — the server owns it.</span>
+          </div>
+
+          {createProduct.isError && (
+            <p role="status">
+              <strong>Could not create product.</strong> {errorMessage(createProduct.error)}
+            </p>
+          )}
+        </form>
+      </details>
     </section>
   );
 }

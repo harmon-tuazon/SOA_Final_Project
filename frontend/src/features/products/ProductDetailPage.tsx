@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { errorMessage } from '../../lib/api';
 import {
+  formatDate,
   formatMoney,
   useAdjustStock,
   useDeleteProduct,
@@ -9,11 +10,11 @@ import {
   useUpdateProduct,
   type UpdateProductInput,
 } from './api';
+import { StockBadge, Stars } from './ui';
 
 // Product detail — the "product page" half of an Amazon-style storefront:
-// full description, price/category/rating/stock, and the actions the
-// service permits: edit the descriptive fields, adjust stock by +/-1
-// (atomic on the server), and delete.
+// image alongside the descriptive fields, and the actions the service
+// permits: edit, adjust stock by +/-1 (atomic on the server), and delete.
 
 export function ProductDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -25,6 +26,7 @@ export function ProductDetailPage() {
   const adjustStock = useAdjustStock();
 
   const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
@@ -102,92 +104,158 @@ export function ProductDetailPage() {
         <Link to="/products">← Back to products</Link>
       </p>
 
-      <h1>{product.name}</h1>
+      <div className="product-detail">
+        <div className="product-detail__media">
+          {product.imageUrl ? (
+            <img src={product.imageUrl} alt="" />
+          ) : (
+            <span className="product-detail__media--empty">No image</span>
+          )}
+        </div>
 
-      {product.imageUrl ? (
-        <img src={product.imageUrl} alt={product.name} width={240} />
-      ) : (
-        <p>No image</p>
+        <div>
+          <h1>{product.name}</h1>
+
+          <Stars rating={product.rating} />
+
+          <p className="product-detail__price">{formatMoney(product.price)}</p>
+
+          <p>
+            <StockBadge stock={product.stock} />
+          </p>
+
+          <p className="product-detail__description">
+            {product.description || 'No description provided.'}
+          </p>
+
+          <dl className="spec-list">
+            <dt>Category</dt>
+            <dd>{product.category}</dd>
+            <dt>Stock</dt>
+            <dd>{product.stock}</dd>
+            <dt>Rating</dt>
+            <dd>{product.rating.toFixed(1)} / 5</dd>
+            <dt>Added</dt>
+            <dd>{formatDate(product.createdAt)}</dd>
+            <dt>Last updated</dt>
+            <dd>{formatDate(product.updatedAt)}</dd>
+          </dl>
+
+          <h2>Adjust stock</h2>
+          <div className="stock-controls">
+            <button
+              type="button"
+              onClick={() => adjustStock.mutate({ id: product.id, delta: -1 })}
+              disabled={adjustStock.isPending || product.stock === 0}
+              aria-label="Decrease stock by one"
+            >
+              −
+            </button>
+            <span className="stock-controls__value">{product.stock}</span>
+            <button
+              type="button"
+              onClick={() => adjustStock.mutate({ id: product.id, delta: 1 })}
+              disabled={adjustStock.isPending}
+              aria-label="Increase stock by one"
+            >
+              +
+            </button>
+            <span className="subtle">Applied atomically — the server refuses to oversell.</span>
+          </div>
+          {adjustStock.isError && (
+            <p role="status">
+              <strong>Could not adjust stock.</strong>{' '}
+              {errorMessage(adjustStock.error, 'Please try again.')}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <h2>Manage</h2>
+
+      {!editing && (
+        <div className="form-actions">
+          <button type="button" onClick={startEditing}>
+            Edit product
+          </button>
+          {!confirmingDelete && (
+            <button type="button" className="btn--danger" onClick={() => setConfirmingDelete(true)}>
+              Delete product
+            </button>
+          )}
+        </div>
       )}
 
-      <p>{product.description || 'No description provided.'}</p>
+      {confirmingDelete && !editing && (
+        <div role="status">
+          <strong>Delete “{product.name}”?</strong> This cannot be undone.
+          <div className="form-actions" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn--danger"
+              onClick={handleDelete}
+              disabled={deleteProduct.isPending}
+            >
+              {deleteProduct.isPending ? 'Deleting…' : 'Yes, delete it'}
+            </button>
+            <button type="button" onClick={() => setConfirmingDelete(false)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
 
-      <dl>
-        <dt>Price</dt>
-        <dd>{formatMoney(product.price)}</dd>
-        <dt>Category</dt>
-        <dd>{product.category}</dd>
-        <dt>Rating</dt>
-        <dd>{product.rating.toFixed(1)} / 5</dd>
-        <dt>Stock</dt>
-        <dd>{product.stock === 0 ? 'Out of stock' : product.stock}</dd>
-        <dt>Last updated</dt>
-        <dd>{product.updatedAt}</dd>
-      </dl>
-
-      <h2>Stock</h2>
-      <p>
-        <button
-          type="button"
-          onClick={() => adjustStock.mutate({ id: product.id, delta: -1 })}
-          disabled={adjustStock.isPending || product.stock === 0}
-        >
-          − 1
-        </button>{' '}
-        <button
-          type="button"
-          onClick={() => adjustStock.mutate({ id: product.id, delta: 1 })}
-          disabled={adjustStock.isPending}
-        >
-          + 1
-        </button>
-      </p>
-      {adjustStock.isError && (
+      {deleteProduct.isError && (
         <p role="status">
-          <strong>Could not adjust stock.</strong>{' '}
-          {errorMessage(adjustStock.error, 'Please try again.')}
+          <strong>Could not delete the product.</strong>{' '}
+          {errorMessage(deleteProduct.error, 'Please try again.')}
         </p>
       )}
 
-      <h2>Edit</h2>
-      {!editing && (
-        <button type="button" onClick={startEditing}>
-          Edit product
-        </button>
-      )}
       {editing && (
         <form onSubmit={handleEditSubmit}>
-          <label>
-            Name
-            <input value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            Description
-            <input value={description} onChange={(e) => setDescription(e.target.value)} />
-          </label>
-          <label>
-            Price
-            <input
-              type="number"
-              step="0.01"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-            />
-          </label>
-          <label>
-            Category
-            <input value={category} onChange={(e) => setCategory(e.target.value)} />
-          </label>
-          <label>
-            Image URL
-            <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
-          </label>
-          <button type="submit" disabled={updateProduct.isPending}>
-            {updateProduct.isPending ? 'Saving…' : 'Save'}
-          </button>{' '}
-          <button type="button" onClick={() => setEditing(false)}>
-            Cancel
-          </button>
+          <div className="form-grid">
+            <label className="field">
+              <span>Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Category</span>
+              <input value={category} onChange={(e) => setCategory(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Price</span>
+              <input
+                type="number"
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+              />
+            </label>
+            <label className="field form-grid--wide">
+              <span>Image URL</span>
+              <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
+            </label>
+            <label className="field form-grid--wide">
+              <span>Description</span>
+              <textarea
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="form-actions">
+            <button type="submit" disabled={updateProduct.isPending}>
+              {updateProduct.isPending ? 'Saving…' : 'Save changes'}
+            </button>
+            <button type="button" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <span className="subtle">Stock is changed above, not here.</span>
+          </div>
+
           {updateProduct.isError && (
             <p role="status">
               <strong>Could not update the product.</strong>{' '}
@@ -195,17 +263,6 @@ export function ProductDetailPage() {
             </p>
           )}
         </form>
-      )}
-
-      <h2>Danger zone</h2>
-      <button type="button" onClick={handleDelete} disabled={deleteProduct.isPending}>
-        {deleteProduct.isPending ? 'Deleting…' : 'Delete product'}
-      </button>
-      {deleteProduct.isError && (
-        <p role="status">
-          <strong>Could not delete the product.</strong>{' '}
-          {errorMessage(deleteProduct.error, 'Please try again.')}
-        </p>
       )}
     </section>
   );

@@ -443,3 +443,408 @@ input[type="checkbox"] {
   width: auto;
   min-width: 0;
 }
+
+/* Selects were previously unstyled, so they fell back to the raw OS widget
+   next to our styled inputs. Match the input treatment. */
+select {
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 8px 10px;
+  border: 1px solid #888c8c;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+  border-color: #e77600;
+  box-shadow: 0 0 0 3px rgba(228, 121, 17, 0.25);
+}
+
+textarea {
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 8px 10px;
+  border: 1px solid #888c8c;
+  border-radius: 6px;
+  background: #fff;
+  width: 100%;
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: #e77600;
+  box-shadow: 0 0 0 3px rgba(228, 121, 17, 0.25);
+}
+
+/* ---- Form field layout ------------------------------------------------- */
+/*
+ * Bare `label` wrapping an input renders the caption and the field on one
+ * line, so stacked fields sit at ragged widths. `.field` makes the caption a
+ * block above its control; `.form-grid` lays several out responsively.
+ */
+
+.field {
+  display: block;
+  margin: 0;
+}
+
+.field > span {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+
+.field input,
+.field select,
+.field textarea {
+  max-width: 100%;
+  width: 100%;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.form-grid--wide {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ---- Page head + toolbar ---------------------------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page-head h1 {
+  margin-bottom: 0;
+}
+
+.result-count {
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+/* The filter/search row. It's a <form>, so it inherits the card chrome
+   above — this just makes it a compact single row instead of a tall panel. */
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  margin: 16px 0 20px;
+}
+
+.toolbar .field {
+  flex: 0 1 200px;
+}
+
+.toolbar .field--grow {
+  flex: 1 1 260px;
+}
+
+/* ---- Collapsible section (e.g. the "add a product" form) --------------- */
+
+.disclosure {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin: 24px 0;
+  overflow: hidden;
+}
+
+.disclosure > summary {
+  cursor: pointer;
+  padding: 14px 20px;
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary::before {
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.disclosure[open] > summary::before {
+  content: "−";
+}
+
+.disclosure > summary:hover {
+  background: var(--secondary);
+}
+
+/* The nested form already sits inside the disclosure's card — drop its own. */
+.disclosure form {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  margin: 0;
+}
+
+/* ---- Product catalog grid ---------------------------------------------- */
+
+.product-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+.product-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.product-card:hover {
+  box-shadow: 0 4px 14px rgba(15, 17, 17, 0.18);
+  transform: translateY(-2px);
+}
+
+/* Fixed-ratio media box so cards align on a row regardless of image size. */
+.product-card__media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  background: #f7f8f8;
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+}
+
+.product-card__media img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.product-card__media--empty {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.product-card__body {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.product-card__title {
+  font-size: 0.98rem;
+  font-weight: 500;
+  margin: 0;
+  line-height: 1.35;
+  /* Keep titles to two lines so every card's price row lines up. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.product-card__price {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.product-card__meta {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+/* ---- Rating ------------------------------------------------------------ */
+
+.rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.rating__stars {
+  color: #de7921;
+  letter-spacing: 1px;
+}
+
+/* ---- Stock badges ------------------------------------------------------ */
+
+.badge[data-stock="in"] {
+  background: #e6f4ea;
+  color: #1a7f37;
+  border-color: #b7e0c2;
+}
+
+.badge[data-stock="low"] {
+  background: #fff3e0;
+  color: #a15c00;
+  border-color: #f5d9a8;
+}
+
+.badge[data-stock="out"] {
+  background: #fdecea;
+  color: var(--danger);
+  border-color: #f5c2bd;
+}
+
+/* ---- Product detail layout -------------------------------------------- */
+
+.product-detail {
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) 1fr;
+  gap: 28px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .product-detail {
+    grid-template-columns: 1fr;
+  }
+}
+
+.product-detail__media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.product-detail__media img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.product-detail__media--empty {
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.product-detail__price {
+  font-size: 1.7rem;
+  font-weight: 700;
+  margin: 4px 0 12px;
+}
+
+.product-detail__description {
+  color: var(--ink);
+  margin: 12px 0 20px;
+  max-width: 62ch;
+}
+
+/* Key/value strip on the detail page. Not `section > dl`, so it needs its
+   own chrome rather than inheriting the generic card rule. */
+.spec-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 20px;
+  margin: 0 0 20px;
+}
+
+.spec-list dt {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.spec-list dd {
+  margin: 0;
+  font-weight: 500;
+}
+
+.stock-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stock-controls__value {
+  min-width: 3ch;
+  text-align: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.subtle {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+/* Visible to screen readers only — the star glyphs are aria-hidden, so the
+   numeric rating needs the "out of 5" context spelled out somewhere. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

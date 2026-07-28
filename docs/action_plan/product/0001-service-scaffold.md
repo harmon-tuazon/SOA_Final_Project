@@ -1,7 +1,3 @@
-
-
-
-
 # 0001 — Product Service Scaffold
 
 > Scaffold `services/product/` — an Amazon-style product-catalog REST API backed by its own DynamoDB table — plus the SPA catalog/detail screens that consume it.
