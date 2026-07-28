@@ -6,7 +6,12 @@ import { ProductDetailPage } from './features/products/ProductDetailPage';
 import { OrdersPage } from './features/orders/OrdersPage';
 import { NewOrderPage } from './features/orders/NewOrderPage';
 import { OrderDetailPage } from './features/orders/OrderDetailPage';
+import { ProfilePage } from './features/users/ProfilePage';
+import { BillingPage } from './features/users/BillingPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
+import { LoginPage } from './auth/LoginPage';
+import { RegisterPage } from './auth/RegisterPage';
+import { ConfirmPage } from './auth/ConfirmPage';
 
 // Route registry — register new routes here as { path, element } children.
 // To add a page: create src/features/<name>/ (api.ts + a <Name>Page.tsx,
@@ -56,6 +61,25 @@ export const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <OrderDetailPage />
+          </ProtectedRoute>
+        ),
+      },
+      { path: 'login', element: <LoginPage /> },
+      { path: 'register', element: <RegisterPage /> },
+      { path: 'confirm', element: <ConfirmPage /> },
+      {
+        path: 'profile',
+        element: (
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'billing',
+        element: (
+          <ProtectedRoute>
+            <BillingPage />
           </ProtectedRoute>
         ),
       },

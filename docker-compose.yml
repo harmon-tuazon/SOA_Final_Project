@@ -43,3 +43,24 @@ services:
       CORS_ALLOWED_ORIGIN: "*"
     depends_on:
       - dynamodb-local
+
+  user:
+    build: services/user
+    ports:
+      - "3002:3000"
+    environment:
+      PORT: 3000
+      USER_TABLE: soa-user
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      # Dummy local creds — DynamoDB Local does not validate them, but the
+      # SDK requires *some* credentials to be present to sign requests.
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      CORS_ALLOWED_ORIGIN: "*"
+      # COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID intentionally left unset
+      # locally — with no pool to verify against, every protected route
+      # correctly responds 401 "auth not configured" (see src/auth.js)
+      # rather than crashing. Set both to exercise real auth locally.
+    depends_on:
+      - dynamodb-local

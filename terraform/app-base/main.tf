@@ -109,3 +109,14 @@ module "product_table" {
   name        = "product"
   hash_key    = "id"
 }
+
+# user service (PRD user/0001). Permanent: profile + billing data survives
+# every app-edge teardown, and the pipeline is denied DeleteTable. The hash
+# key is the Cognito `sub` — Cognito owns identity, this table owns profile.
+module "user_table" {
+  source = "../modules/data"
+
+  name_prefix = var.name_prefix
+  name        = "user"
+  hash_key    = "userId"
+}

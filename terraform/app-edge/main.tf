@@ -43,6 +43,15 @@ locals {
   cluster_id         = data.terraform_remote_state.base.outputs.cluster_id
   execution_role_arn = data.terraform_remote_state.base.outputs.execution_role_arn
   alb_sg_id          = data.terraform_remote_state.base.outputs.alb_sg_id
+
+  # Cognito identifiers (PRD platform/0009) and the SPA's origin — all
+  # non-secret. Read by the user service (PRD user/0001) for JWKS-based token
+  # verification and CORS: the SPA sends an Authorization header on every
+  # call, which makes every cross-origin request preflighted, so
+  # CORS_ALLOWED_ORIGIN must be correct for the app to work at all.
+  cognito_user_pool_id = data.terraform_remote_state.base.outputs.cognito_user_pool_id
+  cognito_client_id    = data.terraform_remote_state.base.outputs.cognito_client_id
+  frontend_origin      = "http://${data.terraform_remote_state.base.outputs.frontend_website_endpoint}"
 }
 
 # --- Shared edge: ALB + HTTP listener (the only billable resource this
@@ -131,6 +140,38 @@ module "product_service" {
   priority           = 110
   env                = { PRODUCT_TABLE = "${var.name_prefix}-product" }
   table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
+  vpc_id             = local.vpc_id
+  public_subnet_ids  = local.public_subnet_ids
+  cluster_id         = local.cluster_id
+  alb_sg_id          = local.alb_sg_id
+  listener_arn       = module.alb.listener_arn
+  execution_role_arn = local.execution_role_arn
+  boundary_arn       = local.boundary_arn
+}
+
+# user service (PRD user/0001); priority 120 (order holds 100, product holds
+# 110; the next service takes 130). No task-role change for Cognito is needed — JWKS
+# verification is an unauthenticated HTTPS fetch of public keys, not an AWS
+# API call, so the boundary's cognito-idp:* allowances go unused by design.
+module "user_service" {
+  source = "../modules/ecs-service"
+
+  name_prefix = var.name_prefix
+  region      = var.region
+  name        = "user"
+  port        = 3000
+  image_tag   = var.image_tag
+  route       = "/users*"
+  priority    = 120
+
+  env = {
+    USER_TABLE           = "${var.name_prefix}-user"
+    COGNITO_USER_POOL_ID = local.cognito_user_pool_id
+    COGNITO_CLIENT_ID    = local.cognito_client_id
+    CORS_ALLOWED_ORIGIN  = local.frontend_origin
+  }
+
+  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-user"]
   vpc_id             = local.vpc_id
   public_subnet_ids  = local.public_subnet_ids
   cluster_id         = local.cluster_id

@@ -81,13 +81,49 @@ Copy the shape of `src/features/products/` — the worked example:
 No infra or build config changes are needed — the pipeline builds and
 deploys everything under `frontend/` as-is.
 
-## Auth (stub)
+## Auth
 
-`src/auth/AuthContext.tsx` and `src/auth/ProtectedRoute.tsx` are a stub: a
-mock signed-in user, always-allow routes. Real Amazon Cognito auth is
-deferred to a later PRD (needs HTTPS redirect URIs). Look for
-`// TODO(cognito):` comments marking where the real integration plugs in —
-consuming code (`useAuth()`, `<ProtectedRoute>`) is not expected to change.
+`src/auth/AuthContext.tsx` and `src/auth/ProtectedRoute.tsx` implement real
+Amazon Cognito authentication — **SPA-direct** over Cognito's public HTTPS
+APIs (`SignUp` / `ConfirmSignUp` / `InitiateAuth` via SRP), per
+[ADR 0005](../docs/architecture/decisions/0005-cognito-auth-over-http.md) and
+[PRD user/0001](../docs/action_plan/user/0001-user-service.md). There is no
+Cognito hosted UI and no redirect URIs — the login/register/confirm screens
+under `src/auth/` are hand-built and call
+[`amazon-cognito-identity-js`](https://www.npmjs.com/package/amazon-cognito-identity-js)
+directly, so the HTTPS-redirect-URI constraint that blocks the hosted UI
+never applies here.
+
+- **Config:** `public/config.json` now carries `cognitoUserPoolId` and
+  `cognitoClientId` alongside `apiBaseUrl`. Both are non-secret (a pool id and
+  a *public* app client id — the client has no secret to leak) and follow the
+  same runtime-config seam as the API base URL (`src/lib/config.ts`). When
+  either is empty — e.g. locally, or before the Cognito pool is deployed —
+  `useAuth()` reports `authConfigured: false` and every auth-gated screen
+  (`LoginPage`, `RegisterPage`, `ConfirmPage`, `<ProtectedRoute>`) renders a
+  graceful "authentication is not configured yet" message instead of
+  crashing or rendering a form that can never succeed.
+- **Flow:** register (`SignUp`) → confirm the 6-digit emailed code
+  (`ConfirmSignUp`) → sign in (`InitiateAuth` via SRP — the password itself
+  never crosses the wire) → the SPA holds an ID/access/refresh token triple.
+  `useAuth().getIdToken()` resolves the *current* session's ID token,
+  transparently refreshing it via the refresh token when expired; `lib/api.ts`
+  calls it on every request and attaches `Authorization: Bearer <token>` when
+  a session exists (no session → no header → public endpoints keep working).
+- **Token storage:** `amazon-cognito-identity-js` persists tokens in
+  `localStorage` by default, and this app leaves that default in place — an
+  **accepted, documented choice** ([PRD user/0001 §9.1](../docs/action_plan/user/0001-user-service.md#91-security-posture)),
+  not an oversight. It means an XSS bug would expose tokens; acceptable for
+  this disposable, no-real-user-data course environment, retired alongside
+  the other HTTP-transport trade-offs when the deferred HTTPS/CloudFront PRD
+  lands.
+- **Session restore:** on mount, `AuthProvider` calls
+  `userPool.getCurrentUser()?.getSession(...)`, so a page reload keeps an
+  already-signed-in user signed in without re-entering credentials.
+- **Profile & billing:** `src/features/users/` (`ProfilePage`, `BillingPage`)
+  are the first screens built against this auth — see
+  [adding-a-frontend-feature.md](../docs/operations/adding-a-frontend-feature.md)
+  for the general feature recipe they follow.
 
 ## Notes
 
