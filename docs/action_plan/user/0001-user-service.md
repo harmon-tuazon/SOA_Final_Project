@@ -13,6 +13,8 @@
 
 **Amendment (2026-07-24, at the repo owner's direction):** all work in this PRD — including the two Terraform blocks specified in §5.1 — is executed **in this repo** by the planned agents, superseding the DevOps-handoff pattern described in the ownership note below. §5.1 stands as the specification being implemented, not a handoff. Manual out-of-band steps are tracked under [`docs/to-dos/`](../../to-dos/README.md).
 
+**Amendment (2026-07-24, mechanical):** listener priority moved **110 → 120**: [`product/0001`](../product/0001-service-scaffold.md) landed on `main` first and took 110 (order holds 100). All priority references below reflect 120.
+
 **Depends on [`platform/0009`](../platform/0009-cognito-user-pool.md)** — the Cognito user pool, its app client, and the `config.json` plumbing that carries their ids to the SPA. This PRD's app code can be written and unit-tested before that lands, but **cannot be verified end-to-end until it does**.
 
 **Ownership note:** per the amendment in [`order/0001` §3](../order/0001-service-scaffold.md), **infrastructure is owned by the DevOps team**. The two Terraform blocks this service needs are therefore *specified* in §5.1 and handed off, not written here — the same pattern `order/0001` used. **Consequence: until DevOps lands them, `services/user/` is buildable, testable and runnable locally, but is not deployed, has no `soa-user` table, and is not reachable on the ALB.**
@@ -125,7 +127,7 @@ Each is checkable by a command in §8.
 5. No secret, pool id, client id or origin is hardcoded: `services/user/src` reads all of them from `process.env`.
 6. `npm run build` in `frontend/` succeeds and `npm test` (if defined) passes; the SPA boots with an **unconfigured** `config.json` without crashing (graceful "auth not configured" state).
 7. **After the DevOps handoff (§5.1) lands:** `terraform -chdir=terraform/app-base validate` and `terraform -chdir=terraform/app-edge validate` pass, and `plan` shows creates with **0 destroys**.
-8. **After the handoff lands:** listener priority **110** is unique in `app-edge`, and the `user` task role carries **`soa-boundary`** scoped to `soa-user` (+ `/index/*`) only — no `*` resource, no inline policy, no AWS-managed policy.
+8. **After the handoff lands:** listener priority **120** is unique in `app-edge`, and the `user` task role carries **`soa-boundary`** scoped to `soa-user` (+ `/index/*`) only — no `*` resource, no inline policy, no AWS-managed policy.
 9. **After merge + CD:** `curl -s -o /dev/null -w '%{http_code}' http://<alb-dns>/users/me` returns **401** (proving the route is live *and* enforcing auth), and returns **200** with a valid ID token.
 10. A full deployed round-trip: register in the SPA → code arrives → confirm → sign in → profile page loads → save billing → reload shows it persisted.
 11. `docs/action_plan/README.md` gains a `user/` group with this PRD listed.
@@ -165,7 +167,7 @@ Each is checkable by a command in §8.
 | Table | `soa-user`, hash key `userId` |
 | Env | `USER_TABLE`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `CORS_ALLOWED_ORIGIN`, `PORT=3000` |
 | ALB route | `/users*` |
-| Listener priority | **110** (order holds 100; the next service takes 120) |
+| Listener priority | **120** (order holds 100, product holds 110; the next service takes 130) |
 | Port | 3000 |
 
 ### 5.1 DevOps handoff — the two Terraform blocks this service needs
@@ -199,7 +201,7 @@ module "user_service" {
   port        = 3000
   image_tag   = var.image_tag
   route       = "/users*"
-  priority    = 110
+  priority    = 120
 
   env = {
     USER_TABLE            = "${var.name_prefix}-user"
@@ -223,7 +225,7 @@ Notes for whoever applies this:
 - **`local.cognito_user_pool_id` / `local.cognito_client_id` do not exist yet.** They are added alongside the existing `local.*` aliases in `app-edge/main.tf`, reading [`platform/0009`](../platform/0009-cognito-user-pool.md)'s new `app-base` outputs through the same `terraform_remote_state` data source the other foundation values already use. **This block will not plan until `platform/0009` has been applied.**
 - **Both values are non-secret** (a pool id and a *public* app client id) — injecting them as plain `env` is correct and does not violate the no-secrets-in-task-definitions rule. The service needs no secret at all, because it verifies tokens against public JWKS.
 - **`CORS_ALLOWED_ORIGIN` should be set** to the `frontend` module's website endpoint output. Unlike `order`, this is not optional in practice: the SPA sends an `Authorization` header, which makes every call a **preflighted** cross-origin request, so a missing/incorrect origin breaks the app even though the ALB is reachable.
-- **Priority 110 is free** — `order_service` holds 100.
+- **Priority 120 is free** — `order_service` holds 100, `product_service` holds 110.
 - **No task-role change is needed for Cognito.** JWKS verification is an unauthenticated HTTPS fetch of public keys; the boundary's `cognito-idp:*` allowances are not used by this design.
 - Both configs are pipeline-applied — no manual `terraform apply` once merged.
 
@@ -298,7 +300,7 @@ curl -s -H "Authorization: Bearer $ID_TOKEN" "http://$ALB/users/me"           # 
 | 10 | Manual end-to-end pass in a browser with a real inbox, recorded for the final presentation |
 | 11 | The index line exists |
 
-**Infra-reviewer pass is mandatory before merge.** Specifically: the task role is boundary-carrying and `soa-user`-scoped, priority 110 collides with nothing, no new billable resource beyond the one Fargate task, and no credential or endpoint is embedded anywhere.
+**Infra-reviewer pass is mandatory before merge.** Specifically: the task role is boundary-carrying and `soa-user`-scoped, priority 120 collides with nothing, no new billable resource beyond the one Fargate task, and no credential or endpoint is embedded anywhere.
 
 ## 9. Additional considerations
 
