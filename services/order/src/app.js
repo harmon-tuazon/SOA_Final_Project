@@ -52,10 +52,17 @@ app.use(express.json());
 // ALB is a different origin than the S3 website). Origin is read from env —
 // never hardcode an origin, IP, or load-balancer DNS name here.
 // Hand-rolled rather than the `cors` package to keep the image lean.
+//
+// The SPA sends an `Authorization: Bearer <id token>` header on every
+// protected call, which makes every such call a *preflighted* cross-origin
+// request — so Access-Control-Allow-Headers MUST include `authorization`,
+// not just `content-type`, or the browser blocks the response before it
+// ever reaches this service (even though this service does its own thing
+// with auth and doesn't read that header).
 app.use((req, res, next) => {
   const allowedOrigin = process.env.CORS_ALLOWED_ORIGIN || '*';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  res.setHeader('Access-Control-Allow-Headers', 'content-type');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();

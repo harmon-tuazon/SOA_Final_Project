@@ -436,6 +436,13 @@ describe('CORS', () => {
     expect(res.headers['access-control-allow-methods']).toContain('POST');
   });
 
+  it('advertises authorization in Access-Control-Allow-Headers', async () => {
+    const res = await request(app).options('/orders');
+
+    expect(res.headers['access-control-allow-headers']).toMatch(/authorization/i);
+    expect(res.headers['access-control-allow-headers']).toMatch(/content-type/i);
+  });
+
   it('defaults Access-Control-Allow-Origin to * when unset', async () => {
     mockSend.mockResolvedValueOnce({ Items: [] });
 
