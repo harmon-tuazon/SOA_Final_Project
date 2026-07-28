@@ -4,10 +4,11 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-28
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-28 (user)
+- **Completed:** 2026-07-28 (PR #31, verified live)
 
 > Decisions settled via `/grill-me`. Execution starts only after this PRD is marked **Approved**.
 
@@ -114,4 +115,25 @@ No manual/destructive step — deploys via CD (base then edge).
 
 ## Outcome
 
-_Filled after execution._
+**Done — shipped in one PR (#31) and verified live on 2026-07-28.** Service discovery is in place and exercised by a real order→product call.
+
+**What landed:**
+- **`app-base`:** the `soa` HTTP namespace (`aws_service_discovery_http_namespace`) and a shared internal **mesh SG** (self-ingress on 3000, open egress), both exported as outputs. Permanent and free; they survive an edge teardown.
+- **`ecs-service` module (`app-edge`):** a `service_connect_configuration` on every ECS service (joins `soa`, advertises the app port under the service's logical name), the mesh SG appended to each task's `network_configuration.security_groups` (alongside its ALB-scoped SG), and `PRODUCT_SERVICE_URL = "http://product:3000"` injected into the order service. Task memory was bumped **512 → 1024 MB** to seat the Envoy sidecar alongside the Node app.
+- **order service:** `productClient.js` reads `PRODUCT_SERVICE_URL` and, on `POST /orders`, validates each line item's `productId` via `GET /products/:id` — `404` → **400** (names the missing product), `5xx`/unreachable/timeout → **503** fail-closed, all `200` → place the order (read-only; no stock write; 2500 ms timeout). Product service unchanged. 78 order unit tests cover the 404/5xx/ok branches (mocked).
+- **CD:** a smoke-test step seeds a product, then places a valid order (expects 2xx) and a bogus-product order (expects 4xx) against the live services.
+- **Docs/factory:** [ADR 0006](../../architecture/decisions/0006-service-discovery.md), the "Talking to another service" section of `service-contract.md`, `/new-service` (inter-service-call step), and the `overview.md` interaction + sequence diagrams.
+
+**Deviations from plan:**
+- **New deployer IAM grant required (not anticipated in §9.1).** `infra-reviewer` caught that creating `aws_service_discovery_http_namespace` needs `servicediscovery:*`, which the deployer lacked → CD would have failed closed. Added `servicediscovery:*` to the deployer's `GlobalServiceManagement` statement in `terraform/iam.tf`, **human-applied on root** (admin creds), bundled into the PR #31 effort. This is the only manual step the original PRD missed.
+- **Memory bump was needed, not merely possible.** The PRD flagged 512→1024 as conditional; the sidecar did require it, so all three tasks now run at 1 GB (small $ impact, lower on Spot).
+- **SG = shared mesh, not per-caller** — decided during the grill and already reflected in §3 above; noted here for the record.
+
+**Verification (success criteria met):**
+- Namespace `soa` exists; all three services report Service Connect enabled.
+- `terraform validate` passed both configs; services healthy after the rollout.
+- **Live:** a `POST /orders` for a real product returned **201** (order saved, having reached `http://product:3000`); a bogus-product order returned **400** — proving the order→product Service Connect call works end to end.
+- No hardcoded endpoints (order reads `PRODUCT_SERVICE_URL`; CI grep green); mesh SG trusts only itself.
+- Cost: namespace + Service Connect free; only the 512→1024 MB bump adds a few $/mo, reduced on Spot.
+
+Supersedes nothing; recorded as [ADR 0006](../../architecture/decisions/0006-service-discovery.md).

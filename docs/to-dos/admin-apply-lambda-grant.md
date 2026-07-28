@@ -1,10 +1,12 @@
 # Admin-apply the deployer `lambda:*` grant
 
-- **Status:** Pending
+- **Status:** Done (2026-07-28)
 - **Owner:** AWS admin — whoever holds the admin console user from [PRD platform/0007](../action_plan/platform/0007-dynamodb-console-users.md). Console access is sufficient (steps below use CloudShell); no local AWS credentials are needed.
 - **When:** **BEFORE** merging the `platform/0008` messaging PR. If 0008 merges first, CD fails closed with `AccessDenied` at `lambda:CreateFunction` — nothing breaks, but the deploy stalls until this is done and CD is re-run.
 - **Source:** [PRD platform/0008 §9.1](../action_plan/platform/0008-messaging-factory.md) — the only root-identity change in the current effort.
 - **Verification:** the next CD run on `main` creates `soa-notification-worker` without an IAM error (check the *Infrastructure CD* run in GitHub Actions).
+
+> **Done (2026-07-28):** the admin applied the grant locally. **Deviation:** the deployer's permissions policy was already near IAM's 6144-char limit, so rather than add a separate `LambdaManagement` statement the wildcard service statements were consolidated into one `GlobalServiceManagement` (identical permissions, verified by `infra-reviewer`) and `lambda:*` added there. CD then created `soa-notification-worker` cleanly. (This tracker mark was lost with an unmerged branch and re-applied on 2026-07-28.)
 
 ## Why this can't be automated
 

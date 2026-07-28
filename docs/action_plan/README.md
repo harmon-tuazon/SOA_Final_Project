@@ -16,11 +16,11 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | [0005 — Service Factory (template + contract + /new-service)](platform/0005-service-factory.md) | Done |
 | [0006 — Base/Edge Split (permanent free base + destroyable edge)](platform/0006-base-edge-split.md) | Done |
 | [0007 — IAM Console Users (DynamoDB least-privilege + 1 admin)](platform/0007-dynamodb-console-users.md) | Done |
-| [0008 — Async Messaging Factory (SQS → Lambda → SNS notifications)](platform/0008-messaging-factory.md) | In Progress |
-| [0009 — Cognito User Pool (SPA-direct auth over HTTP)](platform/0009-cognito-user-pool.md) | In Progress |
+| [0008 — Async Messaging Factory (SQS → Lambda → SNS notifications)](platform/0008-messaging-factory.md) | Done |
+| [0009 — Cognito User Pool (SPA-direct auth over HTTP)](platform/0009-cognito-user-pool.md) | Done |
 | [0010 — Fargate Spot for ECS services (compute cost reduction)](platform/0010-fargate-spot.md) | Done |
 | [0011 — Rubric Quick Wins (CI tests, README, monitoring, diagrams)](platform/0011-rubric-quick-wins.md) | Done |
-| [0012 — Service Discovery (ECS Service Connect + order→product)](platform/0012-service-discovery.md) | Draft |
+| [0012 — Service Discovery (ECS Service Connect + order→product)](platform/0012-service-discovery.md) | Done |
 
 ### frontend/
 | PRD | Status |
@@ -35,9 +35,9 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 ### product/
 | PRD | Status |
 | --- | --- |
-| [0001 — Product Service Scaffold](product/0001-service-scaffold.md) | In Progress |
+| [0001 — Product Service Scaffold](product/0001-service-scaffold.md) | Done |
 
 ### user/
 | PRD | Status |
 | --- | --- |
-| [0001 — User Service (Cognito-authenticated profile & billing)](user/0001-user-service.md) | In Progress |
+| [0001 — User Service (Cognito-authenticated profile & billing)](user/0001-user-service.md) | Done |

@@ -4,9 +4,10 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
+- **Status:** Done <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
 - **Date:** 2026-07-23
 - **Approved:** 2026-07-24 by the repo owner ("start executing them all in the correct order")
+- **Completed:** 2026-07-28 (PR #21, deployed + live auth verified)
 - **Author:** Jean-Luc (with Claude Code)
 
 > Execution may only start once the user has confirmed **Approved**. Decisions below were settled via `/grill-me` on 2026-07-23 — they are recorded, not assumed.
@@ -311,4 +312,15 @@ This is an acceptable trade for a **disposable course environment with no real u
 
 ## Outcome
 
-_Filled after execution: what actually happened, deviations from plan. Set status to Done._
+**Done — deployed and exercised live.** The Cognito pool backs real authentication in the SPA today; sign-in works end to end (the team has signed in against it).
+
+**What landed** (merged as PR #21, applied by CD):
+- `terraform/modules/cognito/` — one `aws_cognito_user_pool` (`soa-users`, email sign-in, `auto_verified_attributes = ["email"]`, `CONFIRM_WITH_CODE`, `deletion_protection = "ACTIVE"`) and one **public** `aws_cognito_user_pool_client` (`soa-spa`, no secret, SRP + refresh only, `USER_PASSWORD_AUTH` deliberately absent, 1-hour access/id tokens). Wired into `app-base/main.tf` (permanent + free), with `cognito_user_pool_id` / `cognito_client_id` outputs.
+- CD's `config.json` step publishes both non-secret ids to the SPA alongside `apiBaseUrl`, so nothing Cognito-specific is hardcoded and the values survive every `app-edge` teardown.
+- **ADR 0005** (`0005-cognito-auth-over-http.md`) records that the API-based flow (SignUp/ConfirmSignUp/InitiateAuth) works over plain HTTP — no hosted UI, no HTTPS redirect URIs — and narrows ADR 0004's auth-deferral paragraph.
+
+**Deviations from plan:** none material. No root-identity change was needed (the deployer already held `cognito-idp:*`, exactly as §4.5 predicted), so `git diff terraform/*.tf` stayed empty for this work.
+
+**Verification:** `plan` showed the two creates with 0 destroys; the deployed `config.json` carries non-empty `cognitoUserPoolId` / `cognitoClientId`; and a real register → email code → confirm → sign-in round-trip succeeds in the SPA. Recorded as [ADR 0005](../../architecture/decisions/0005-cognito-auth-over-http.md).
+
+**Still tracked out-of-band:** a confirmed demo account for the presentation — [`docs/to-dos/create-demo-cognito-account.md`](../../to-dos/create-demo-cognito-account.md).

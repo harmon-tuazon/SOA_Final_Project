@@ -4,9 +4,10 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
+- **Status:** Done <!-- Draft → Approved → In Progress → Done (or Abandoned) -->
 - **Date:** 2026-07-27
 - **Approved:** 2026-07-27 by the repo owner
+- **Completed:** 2026-07-28 (deployed; live `/products` verified, incl. the order→product call)
 - **Author:** (with Claude Code)
 
 > Execution may only start once the user has confirmed **Approved**.
@@ -303,3 +304,7 @@ Or just open the SPA's Products page and use the create form and the ± stock bu
 - `order/0002` — order → product sync call + stock decrement (the rubric's service-to-service point).
 - `platform/0008` — the SQS→Lambda→SNS async path (rubric-required, still unbuilt; `functions/` does not exist).
 - A `category` GSI (needs the shared `data` module extended) and auth, both deferred as designed.
+
+### Closeout (2026-07-28) — status → Done
+
+The two post-merge items §4.9–§4.10 that held this at *In Progress* are now satisfied: CD is green and `soa-product` is deployed and live behind `/products`. Its liveness was independently exercised by [`platform/0012`](../platform/0012-service-discovery.md)'s smoke test — placing an order for a **real** product returned `201` (proving the order service reached `http://product:3000/products/:id` and product answered `200`), and a bogus product id returned `400`. `GET /orders` continued to return `200` (no regression). Two of the follow-ups above have since been built: **`platform/0008`** (async path) is Done, and the order→product sync call shipped as part of **`platform/0012`** (read-only validation; the stock-decrement half remains the open `order/0002`). Status set to **Done**.
