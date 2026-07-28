@@ -52,6 +52,12 @@ locals {
   cognito_user_pool_id = data.terraform_remote_state.base.outputs.cognito_user_pool_id
   cognito_client_id    = data.terraform_remote_state.base.outputs.cognito_client_id
   frontend_origin      = "http://${data.terraform_remote_state.base.outputs.frontend_website_endpoint}"
+
+  # The async branch's notifications queue (PRD platform/0008) — the producer
+  # needs the URL as env (to call sqs:SendMessage) and the ARN to scope its
+  # task role's SendMessage permission to this queue only.
+  notifications_queue_url = data.terraform_remote_state.base.outputs.notifications_queue_url
+  notifications_queue_arn = data.terraform_remote_state.base.outputs.notifications_queue_arn
 }
 
 # --- Shared edge: ALB + HTTP listener (the only billable resource this
@@ -165,13 +171,17 @@ module "user_service" {
   priority    = 120
 
   env = {
-    USER_TABLE           = "${var.name_prefix}-user"
-    COGNITO_USER_POOL_ID = local.cognito_user_pool_id
-    COGNITO_CLIENT_ID    = local.cognito_client_id
-    CORS_ALLOWED_ORIGIN  = local.frontend_origin
+    USER_TABLE              = "${var.name_prefix}-user"
+    COGNITO_USER_POOL_ID    = local.cognito_user_pool_id
+    COGNITO_CLIENT_ID       = local.cognito_client_id
+    CORS_ALLOWED_ORIGIN     = local.frontend_origin
+    NOTIFICATIONS_QUEUE_URL = local.notifications_queue_url
   }
 
-  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-user"]
+  table_arns = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-user"]
+  # First producer on the async branch (PRD platform/0008) — fire-and-forget
+  # publish on first profile creation; scoped to this queue only.
+  sqs_send_arns      = [local.notifications_queue_arn]
   vpc_id             = local.vpc_id
   public_subnet_ids  = local.public_subnet_ids
   cluster_id         = local.cluster_id
