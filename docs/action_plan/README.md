@@ -19,7 +19,7 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | [0008 — Async Messaging Factory (SQS → Lambda → SNS notifications)](platform/0008-messaging-factory.md) | In Progress |
 | [0009 — Cognito User Pool (SPA-direct auth over HTTP)](platform/0009-cognito-user-pool.md) | In Progress |
 | [0010 — Fargate Spot for ECS services (compute cost reduction)](platform/0010-fargate-spot.md) | Done |
-| [0011 — Rubric Quick Wins (CI tests, README, monitoring, diagrams)](platform/0011-rubric-quick-wins.md) | In Progress |
+| [0011 — Rubric Quick Wins (CI tests, README, monitoring, diagrams)](platform/0011-rubric-quick-wins.md) | Done |
 
 ### frontend/
 | PRD | Status |

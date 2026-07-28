@@ -283,8 +283,11 @@ data "aws_iam_policy_document" "deployer_permissions" {
       "logs:*",
       # Application Auto Scaling: ECS service scaling policies.
       "application-autoscaling:*",
-      # CloudWatch: alarms/dashboards for observability and the cost budget.
+      # CloudWatch: alarms/dashboards for observability.
       "cloudwatch:*",
+      # AWS Budgets: the monthly cost budget (PRD platform/0011). Global
+      # service (no region in the ARN); CreateBudget requires budgets:ModifyBudget.
+      "budgets:*",
       # Cognito: the user pool used for application auth.
       "cognito-idp:*",
       # Lambda: the async notification worker (PRD platform/0008).
