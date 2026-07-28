@@ -223,7 +223,15 @@ resource "aws_ecs_service" "this" {
   cluster         = var.cluster_id
   task_definition = aws_ecs_task_definition.this.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # Fargate Spot toggle (PRD platform/0010): capacity_provider_strategy
+  # replaces launch_type entirely (the two are mutually exclusive on this
+  # resource). requires_compatibilities = ["FARGATE"] on the task definition
+  # above is unchanged — Spot is still Fargate, just interruptible capacity.
+  capacity_provider_strategy {
+    capacity_provider = var.use_fargate_spot ? "FARGATE_SPOT" : "FARGATE"
+    weight            = 1
+  }
 
   network_configuration {
     subnets          = var.public_subnet_ids
