@@ -18,7 +18,7 @@ PRDs are organized **per microservice** (folder matching the service under `serv
 | [0007 — IAM Console Users (DynamoDB least-privilege + 1 admin)](platform/0007-dynamodb-console-users.md) | Done |
 | [0008 — Async Messaging Factory (SQS → Lambda → SNS notifications)](platform/0008-messaging-factory.md) | In Progress |
 | [0009 — Cognito User Pool (SPA-direct auth over HTTP)](platform/0009-cognito-user-pool.md) | In Progress |
-| [0010 — Fargate Spot for ECS services (compute cost reduction)](platform/0010-fargate-spot.md) | In Progress |
+| [0010 — Fargate Spot for ECS services (compute cost reduction)](platform/0010-fargate-spot.md) | Done |
 
 ### frontend/
 | PRD | Status |

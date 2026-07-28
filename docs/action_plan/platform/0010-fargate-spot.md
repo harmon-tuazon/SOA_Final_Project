@@ -4,7 +4,7 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-28
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-28 (user)
@@ -94,4 +94,18 @@ No destructive command — this is a rolling redeploy of existing services onto 
 
 ## Outcome
 
-_Filled after execution._
+Executed as planned; shipped in PR #23, merged to `main`.
+
+**Delivered:**
+- `terraform/modules/ecs-cluster/` — `aws_ecs_cluster_capacity_providers` associating `FARGATE` + `FARGATE_SPOT` with `soa-cluster`.
+- `terraform/modules/ecs-service/` — `launch_type = "FARGATE"` replaced with `capacity_provider_strategy` on `var.use_fargate_spot ? "FARGATE_SPOT" : "FARGATE"`; new `use_fargate_spot` bool var (default `true`).
+- All three services (order, product, user) picked up the default and moved to Spot on the merge CD run.
+
+**Verification (all criteria met):**
+- CD green — applied `app-base` (capacity providers) then `app-edge` (services), and the steady-state wait passed.
+- `aws ecs describe-services` → all three show `capacityProviderStrategy = FARGATE_SPOT`, `runningCount 1/1`; cluster shows `["FARGATE","FARGATE_SPOT"]`; `GET /orders` and `/products` → 200.
+- Compute cost drops ~70% (Fargate ~$18.70 → ~$5.60 per 3 weeks across the 3 tasks); no new billable resource; ALB/IPv4 unchanged.
+
+**Deviation (recorded pre-merge):** switching `launch_type` → `capacity_provider_strategy` is a **ForceNew** on `aws_ecs_service` — the PRD originally described it as a seamless rolling redeploy, but it is a destroy+create of each service resource, causing a one-time ~1–3 min per-route 503 gap on this deploy. `infra-reviewer` verified via a live read-only `plan` that the blast radius was **exactly the 3 `aws_ecs_service` (+ their task defs)** — no DynamoDB table, task role, `soa-boundary`, target group, listener rule, ECR repo, or ALB change. §9 was corrected before merge. Merged at a quiet moment per that guidance.
+
+**Reversibility:** `use_fargate_spot = false` (default flip or per-service) reverts to on-demand with no cluster change (both providers stay associated). Survives the edge teardown cycle (cluster association in `app-base`; service strategy recreated on each spin-up already carrying Spot).
