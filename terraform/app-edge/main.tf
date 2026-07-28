@@ -113,3 +113,29 @@ module "order_service" {
   execution_role_arn = local.execution_role_arn
   boundary_arn       = local.boundary_arn
 }
+
+# product service (PRD product/0001) — the second service on the shared
+# listener, so it takes priority 110 (order holds 100; the next service
+# takes 120). Its table is created by module.product_table in app-base and
+# referenced here only as a constructed ARN string, since this config cannot
+# see app-base's modules.
+module "product_service" {
+  source = "../modules/ecs-service"
+
+  name_prefix        = var.name_prefix
+  region             = var.region
+  name               = "product"
+  port               = 3000
+  image_tag          = var.image_tag
+  route              = "/products*"
+  priority           = 110
+  env                = { PRODUCT_TABLE = "${var.name_prefix}-product" }
+  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
+  vpc_id             = local.vpc_id
+  public_subnet_ids  = local.public_subnet_ids
+  cluster_id         = local.cluster_id
+  alb_sg_id          = local.alb_sg_id
+  listener_arn       = module.alb.listener_arn
+  execution_role_arn = local.execution_role_arn
+  boundary_arn       = local.boundary_arn
+}

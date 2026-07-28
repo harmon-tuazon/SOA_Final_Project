@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router-dom';
 import { Layout } from './Layout';
 import { HomePage } from './pages/HomePage';
 import { ProductsPage } from './features/products/ProductsPage';
+import { ProductDetailPage } from './features/products/ProductDetailPage';
 import { OrdersPage } from './features/orders/OrdersPage';
 import { NewOrderPage } from './features/orders/NewOrderPage';
 import { OrderDetailPage } from './features/orders/OrderDetailPage';
@@ -23,6 +24,14 @@ export const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <ProductsPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'products/:id',
+        element: (
+          <ProtectedRoute>
+            <ProductDetailPage />
           </ProtectedRoute>
         ),
       },

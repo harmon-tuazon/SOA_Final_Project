@@ -26,3 +26,20 @@ services:
       CORS_ALLOWED_ORIGIN: "*"
     depends_on:
       - dynamodb-local
+
+  product:
+    build: services/product
+    ports:
+      - "3001:3000"
+    environment:
+      PORT: 3000
+      PRODUCT_TABLE: soa-product
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      # Dummy local creds — DynamoDB Local does not validate them, but the
+      # SDK requires *some* credentials to be present to sign requests.
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      CORS_ALLOWED_ORIGIN: "*"
+    depends_on:
+      - dynamodb-local

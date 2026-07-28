@@ -79,7 +79,7 @@ Inputs a new service actually sets (everything else is either a shared default o
 | `name` | Names the ECR repo, log group, roles, security group, container — must be unique (also `soa-<name>` for AWS resource names, per the [service contract](../../.claude/rules/service-contract.md)); must match the `name` used in the matching `app-base` table block |
 | `port` | The container's listening port; also what the task SG opens from the ALB SG |
 | `route` | The listener-rule path pattern forwarded to this service (e.g. `/orders*`) |
-| `priority` | Listener-rule evaluation order — must be unique across every service on the shared listener (increment from the highest existing in `app-edge/main.tf`: 100, 110, 120, …) |
+| `priority` | Listener-rule evaluation order — must be unique across every service on the shared listener. Check the current highest with `grep -n priority terraform/app-edge/main.tf` and increment by 10 (`order`=100, `product`=110 → the next service takes 120) |
 | `table_arns` | The constructed ARN string(s) of the DynamoDB table(s) the task role is scoped to (omit/empty if the service has none) — must match the table `app-base`'s `data` module actually creates (`${var.name_prefix}-<name>`) |
 | `env` | Plain (non-secret) environment variables the container reads at startup |
 
