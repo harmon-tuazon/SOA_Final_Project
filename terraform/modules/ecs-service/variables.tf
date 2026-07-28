@@ -105,3 +105,9 @@ variable "boundary_arn" {
   description = "ARN of the soa-boundary permissions boundary policy, attached to this service's task role. Built as a string by the caller (never looked up via data source)."
   type        = string
 }
+
+variable "use_fargate_spot" {
+  description = "Run this service's tasks on Fargate Spot (~70% cheaper, interruptible) instead of on-demand Fargate."
+  type        = bool
+  default     = true
+}
