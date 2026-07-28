@@ -111,3 +111,9 @@ variable "sqs_send_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "use_fargate_spot" {
+  description = "Run this service's tasks on Fargate Spot (~70% cheaper, interruptible) instead of on-demand Fargate."
+  type        = bool
+  default     = true
+}
