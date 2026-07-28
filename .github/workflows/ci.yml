@@ -57,6 +57,25 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Services ship substantial Jest suites (unit + integration against
+      # in-memory DynamoDB — no AWS needed), so `npm test` is the CI gate
+      # proving each service's behaviour before merge, same rationale as
+      # "Test functions" below. Relies on the runner's preinstalled Node 20
+      # for the same reason (docker-build above also uses only what
+      # ubuntu-latest ships with). Iterates every services/<name> dir except
+      # the never-deployed _template; with zero services this loop no-ops.
+      - name: Test services
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for dir in services/*/; do
+            name=$(basename "$dir")
+            [ "$name" = "_template" ] && continue
+            echo "::group::test services/$name"
+            (cd "$dir" && npm ci && npm test)
+            echo "::endgroup::"
+          done
+
       # Functions are Lambda workers (PRD platform/0008) — there's no Docker
       # build for them (Terraform zips + deploys functions/<name>/index.js
       # directly via archive_file in the app-base apply, not this pipeline;

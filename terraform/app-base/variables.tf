@@ -29,3 +29,9 @@ variable "notification_email" {
   type        = string
   default     = ""
 }
+
+variable "budget_limit_amount" {
+  description = "Monthly cost budget limit, in USD (PRD platform/0011). Kept as a variable (not hardcoded) so it's a one-value change to adjust the spend ceiling."
+  type        = string
+  default     = "30"
+}
