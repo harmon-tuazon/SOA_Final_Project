@@ -24,6 +24,17 @@ resource "aws_ecs_cluster" "this" {
   }
 }
 
+# Associates both FARGATE and FARGATE_SPOT with the cluster (PRD
+# platform/0010): required before any service can request Spot capacity.
+# FARGATE stays associated too so a service can flip back to on-demand
+# (ecs-service's `use_fargate_spot = false`) with no change here. No
+# `default_capacity_provider_strategy` is set — each service's own
+# `capacity_provider_strategy` block decides Spot vs. on-demand.
+resource "aws_ecs_cluster_capacity_providers" "this" {
+  cluster_name       = aws_ecs_cluster.this.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+}
+
 # --- ALB security group -----------------------------------------------------
 #
 # Inbound :80 from the internet (this is the public entry point for every
