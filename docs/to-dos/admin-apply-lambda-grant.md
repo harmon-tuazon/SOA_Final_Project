@@ -1,6 +1,6 @@
 # Admin-apply the deployer `lambda:*` grant
 
-- **Status:** Pending
+- **Status:** Done (2026-07-28) — applied from the messaging branch. The deployer policy had hit AWS's 6144-char managed-policy limit, so the 12 wildcard `Allow` statements were consolidated into one (identical permissions) to make room; `lambda:*` verified live on `soa-deployer`.
 - **Owner:** AWS admin — whoever holds the admin console user from [PRD platform/0007](../action_plan/platform/0007-dynamodb-console-users.md). Console access is sufficient (steps below use CloudShell); no local AWS credentials are needed.
 - **When:** **BEFORE** merging the `platform/0008` messaging PR. If 0008 merges first, CD fails closed with `AccessDenied` at `lambda:CreateFunction` — nothing breaks, but the deploy stalls until this is done and CD is re-run.
 - **Source:** [PRD platform/0008 §9.1](../action_plan/platform/0008-messaging-factory.md) — the only root-identity change in the current effort.

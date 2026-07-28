@@ -1,6 +1,6 @@
 # Set the `NOTIFICATION_EMAIL` Actions variable
 
-- **Status:** Pending
+- **Status:** Done (2026-07-28) — set to `hamtuazon@myseneca.ca,sjlmbuya@myseneca.ca`; the messaging module now creates one SNS subscription per comma-separated address. Subscriptions are created (and confirmed) on the messaging merge — see [confirm-sns-subscription.md](confirm-sns-subscription.md).
 - **Owner:** repo owner (GitHub UI — repository admin access)
 - **When:** before (or any time after) merging the `platform/0008` messaging PR. The Terraform is written to fail soft: while the variable is unset/empty, the SNS **email subscription is simply not created** — everything else (queue, DLQ, topic, Lambda) deploys and works, and the path is still provable via CloudWatch Logs. Setting the variable later just adds the subscription on the next CD run.
 - **Source:** [PRD platform/0008 §5.1](../action_plan/platform/0008-messaging-factory.md) — `notification_email` variable on `terraform/app-base/`.
