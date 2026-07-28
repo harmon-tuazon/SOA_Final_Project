@@ -25,7 +25,7 @@ variable "public_subnet_cidrs" {
 }
 
 variable "notification_email" {
-  description = "Email address subscribed to the notifications SNS topic (PRD platform/0008). Set via TF_VAR_notification_email from the NOTIFICATION_EMAIL GitHub Actions variable in CD. Empty (the default) skips creating the subscription entirely, so this config still plans/applies before the address is set — see docs/to-dos/set-notification-email-variable.md."
+  description = "Email address(es) subscribed to the notifications SNS topic (PRD platform/0008): a single address or a comma-separated list (\"a@x.ca,b@x.ca\") — one subscription per address. Set via TF_VAR_notification_email from the NOTIFICATION_EMAIL GitHub Actions variable in CD. Empty (the default) skips creating subscriptions entirely, so this config still plans/applies before the address is set — see docs/to-dos/set-notification-email-variable.md."
   type        = string
   default     = ""
 }

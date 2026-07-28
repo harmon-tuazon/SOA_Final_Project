@@ -47,17 +47,25 @@ resource "aws_sns_topic" "this" {
   }
 }
 
-# Email subscription: Terraform can create the subscription object, but AWS
-# emails the endpoint a confirmation link that a human must click once before
-# delivery starts (SNS email subscriptions cannot be fully automated). See
-# docs/to-dos/confirm-sns-subscription.md. Defaulting notification_email to
-# "" (count = 0) lets CI/CD plan and apply this module before the recipient
-# address exists as a variable value — the subscription is added on a later
-# apply once the address is supplied.
+# Email subscription(s): notification_email accepts one address OR a
+# comma-separated list ("a@x.ca,b@x.ca") — one SNS subscription is created
+# per address. Terraform creates the subscription objects, but AWS emails
+# EACH endpoint a confirmation link a human must click once before delivery
+# starts (SNS email subscriptions cannot be fully automated). See
+# docs/to-dos/confirm-sns-subscription.md. An empty value yields zero
+# subscriptions, so the module still plans/applies before any recipient is
+# supplied — the addresses are added on a later apply once set.
+locals {
+  notification_emails = [
+    for e in split(",", var.notification_email) : trimspace(e)
+    if trimspace(e) != ""
+  ]
+}
+
 resource "aws_sns_topic_subscription" "email" {
-  count = var.notification_email == "" ? 0 : 1
+  for_each = toset(local.notification_emails)
 
   topic_arn = aws_sns_topic.this.arn
   protocol  = "email"
-  endpoint  = var.notification_email
+  endpoint  = each.value
 }

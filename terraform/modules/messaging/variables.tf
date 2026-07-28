@@ -11,7 +11,7 @@ variable "name" {
 }
 
 variable "notification_email" {
-  description = "Email address to subscribe to the topic. Empty string (the default) skips creating a subscription entirely, so the module can be applied before this address is known/supplied — see docs/to-dos/set-notification-email-variable.md."
+  description = "One or more email addresses to subscribe to the topic — a single address, or a comma-separated list (\"a@x.ca,b@x.ca\"); one SNS subscription is created per address. Empty string (the default) skips creating subscriptions entirely, so the module can be applied before any address is known/supplied — see docs/to-dos/set-notification-email-variable.md."
   type        = string
   default     = ""
   sensitive   = false
