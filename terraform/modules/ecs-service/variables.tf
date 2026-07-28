@@ -106,6 +106,12 @@ variable "boundary_arn" {
   type        = string
 }
 
+variable "sqs_send_arns" {
+  description = "ARNs of SQS queues this service's task role may sqs:SendMessage to (e.g. the notifications queue, PRD platform/0008). Empty (the default) adds no statement — within the soa-boundary's existing SqsDataAccess ceiling, so this only narrows which queue(s) a producer can actually reach."
+  type        = list(string)
+  default     = []
+}
+
 variable "use_fargate_spot" {
   description = "Run this service's tasks on Fargate Spot (~70% cheaper, interruptible) instead of on-demand Fargate."
   type        = bool

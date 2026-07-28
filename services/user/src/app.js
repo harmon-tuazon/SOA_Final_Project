@@ -16,6 +16,7 @@ const {
   buildBillingRecord,
   containsForbiddenCardData,
 } = require('./users');
+const { publishUserProfileCreated } = require('./events');
 
 // Table name is read from the environment — never hardcoded. In app-edge
 // this is injected as USER_TABLE (the seam described in the service
@@ -67,6 +68,13 @@ async function getOrCreateProfile(user) {
         ConditionExpression: 'attribute_not_exists(userId)',
       })
     );
+    // Fire-and-forget: only fires on a genuine first-create (this branch),
+    // never on the ConditionalCheckFailed re-read path below or on any
+    // subsequent read. Never awaited here — must not delay this response —
+    // and its own promise rejections are caught and logged, not surfaced.
+    publishUserProfileCreated(profile).catch((err) => {
+      console.error('Failed to publish UserProfileCreated event', err);
+    });
     return profile;
   } catch (err) {
     if (isConditionFailure(err)) {

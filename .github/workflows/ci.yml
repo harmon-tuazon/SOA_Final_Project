@@ -57,6 +57,26 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Functions are Lambda workers (PRD platform/0008) — there's no Docker
+      # build for them (Terraform zips + deploys functions/<name>/index.js
+      # directly via archive_file in the app-base apply, not this pipeline;
+      # see cd.yml), so `npm test` is the CI gate proving each handler works
+      # before merge. Relies on the runner's preinstalled Node 20 rather than
+      # adding actions/setup-node: the docker-build loop above also uses only
+      # what ubuntu-latest ships with, and a single Lambda-target Node
+      # version doesn't need pinning/caching machinery. Iterates every
+      # functions/<name> dir; with zero functions this loop simply no-ops.
+      - name: Test functions
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for dir in functions/*/; do
+            name=$(basename "$dir")
+            echo "::group::test functions/$name"
+            (cd "$dir" && npm ci && npm test)
+            echo "::endgroup::"
+          done
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 

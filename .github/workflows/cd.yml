@@ -9,12 +9,20 @@ on:
       # 0002) AND builds/deploys service images. The identity foundation in
       # terraform/ root and bootstrap/ are human-applied. Trigger on infra
       # changes to either config or the shared modules they both use,
-      # application code changes (new commit SHA -> new image -> rolling
-      # deploy), and this workflow.
+      # service application code changes (new commit SHA -> new image ->
+      # rolling deploy), function code changes (functions/** — Lambda code
+      # has no separate packaging step in this pipeline: Terraform's
+      # archive_file zips functions/<name>/index.js and its source_code_hash
+      # drives redeploy in the app-base apply, PRD platform/0008 §5.1(c)/(h)
+      # deviation — without this path, a commit touching only
+      # functions/notification-worker/index.js would never trigger CD, the
+      # apply would never run, and the deployed Lambda would silently keep
+      # stale code while CI stayed green), and this workflow.
       - 'terraform/app-base/**'
       - 'terraform/app-edge/**'
       - 'terraform/modules/**'
       - 'services/**'
+      - 'functions/**'
       - '.github/workflows/cd.yml'
 
 permissions:
@@ -29,6 +37,16 @@ env:
   # as TF_STATE_BUCKET used for `terraform init -backend-config`. Harmless
   # for app-base steps, which don't declare this variable.
   TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
+  # Optional demo inbox for the SNS email subscription (PRD platform/0008).
+  # Only terraform/app-base declares `notification_email`; if the
+  # NOTIFICATION_EMAIL repo variable is unset/empty, app-base's plan is
+  # written to simply not create the subscription (queue/DLQ/topic/Lambda
+  # still deploy) — see docs/to-dos/set-notification-email-variable.md.
+  # Harmless for app-edge steps, which don't declare this variable: Terraform
+  # only warns on an undeclared TF_VAR_* env var (it errors only on an
+  # undeclared -var CLI flag), same pattern as TF_VAR_state_bucket above.
+  TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
 
 jobs:
   terraform-apply:
@@ -194,3 +212,89 @@ jobs:
             aws ecs wait services-stable --cluster "$CLUSTER" --services "soa-$name"
             echo "::endgroup::"
           done
+
+      # --- Smoke-test the async path (SQS -> Lambda) -----------------------
+      # Proves the SQS->Lambda half of the notification pipeline end to end
+      # on every deploy (PRD platform/0008 §4.8): publish one synthetic
+      # UserProfileCreated event and look for evidence the worker ran. The
+      # email hop (SNS -> inbox) is deliberately NOT asserted here — the
+      # subscription needs a one-time human confirmation click
+      # (docs/to-dos/confirm-sns-subscription.md), so only the queue/worker
+      # leg is provable from CD.
+      #
+      # Guarded: app-base only gains the `notifications_queue_url` output
+      # once PRD platform/0008's Terraform has landed. Keep CD robust against
+      # an app-base state that predates it (shouldn't happen once this PR
+      # merges) by skipping gracefully instead of failing the deploy on a
+      # missing output.
+      #
+      # The Lambda's name is the literal `soa-notification-worker`, not
+      # derived from $SERVICES (functions aren't ECS services and aren't
+      # part of that discovery loop) — it's the fixed `soa-<name>` name from
+      # the service/function naming convention for this one worker.
+      #
+      # If soa-deployer still lacks `lambda:*`
+      # (docs/to-dos/admin-apply-lambda-grant.md not yet actioned), this step
+      # is never reached: the app-base apply above already failed at
+      # `lambda:CreateFunction`. That fail-closed behaviour is the intended
+      # proof in PRD platform/0008 §4.6, not a bug in this step.
+      - name: Smoke-test the async path (SQS -> Lambda)
+        run: |
+          set -euo pipefail
+
+          QURL=$(terraform -chdir=terraform/app-base output -raw notifications_queue_url 2>/dev/null || true)
+          if [ -z "$QURL" ]; then
+            echo "::notice::notifications_queue_url output not found (pre-platform/0008 app-base state) — skipping the async smoke test."
+            exit 0
+          fi
+
+          FN=soa-notification-worker
+          LOG_GROUP="/aws/lambda/$FN"
+
+          # Captured BEFORE sending, so the log filter below only matches an
+          # invocation this run's message caused, not a stale prior one.
+          START_MS=$(date +%s000)
+
+          echo "::group::send synthetic UserProfileCreated event"
+          aws sqs send-message --queue-url "$QURL" --message-body '{"type":"UserProfileCreated","userId":"cd-smoke-test","email":"cd-smoke@example.invalid","displayName":"CD smoke test","occurredAt":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+          echo "::endgroup::"
+
+          echo "::group::wait for a worker invocation in $LOG_GROUP"
+          found=""
+          for attempt in $(seq 1 12); do
+            count=$(aws logs filter-log-events --log-group-name "$LOG_GROUP" --start-time "$START_MS" --query 'length(events)' --output text 2>/dev/null || echo 0)
+            if [ "$count" != "0" ]; then
+              found="1"
+              break
+            fi
+            echo "no invocation yet (attempt $attempt/12)"
+            [ "$attempt" -lt 12 ] && sleep 10
+          done
+          echo "::endgroup::"
+
+          if [ -z "$found" ]; then
+            echo "::error::No CloudWatch Logs invocation seen in $LOG_GROUP within ~2 minutes of the smoke-test send — the SQS->Lambda path is not proven working."
+            exit 1
+          fi
+
+          # An invocation happening isn't proof it succeeded: START/END/REPORT
+          # lines and the handler's own console.warn (skip) lines all count
+          # toward the check above, so a broken sns:Publish would still pass
+          # it. Re-filter the same window for the handler's exact SNS
+          # publish-failure marker (functions/notification-worker/index.js:
+          # `console.error('Failed to publish notification to SNS; will
+          # retry', ...)`) to prove the invocation both happened AND
+          # processed the synthetic event without hitting that error path.
+          # The email hop (SNS -> confirmed inbox) remains unasserted — see
+          # the header comment above.
+          echo "::group::check for the worker's SNS publish-failure marker"
+          ERROR_PATTERN="Failed to publish notification to SNS"
+          error_count=$(aws logs filter-log-events --log-group-name "$LOG_GROUP" --start-time "$START_MS" --filter-pattern "\"$ERROR_PATTERN\"" --query 'length(events)' --output text 2>/dev/null || echo 0)
+          echo "::endgroup::"
+
+          if [ "$error_count" != "0" ]; then
+            echo "::error::Worker logged its SNS publish-failure marker (\"$ERROR_PATTERN\") for the smoke-test invocation in $LOG_GROUP — the Lambda ran but sns:Publish is failing."
+            exit 1
+          fi
+
+          echo "Async smoke test passed: worker invocation observed in $LOG_GROUP with no SNS publish-failure marker."

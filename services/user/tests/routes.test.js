@@ -22,6 +22,20 @@ jest.mock('@aws-sdk/lib-dynamodb', () => {
   };
 });
 
+// NOTIFICATIONS_QUEUE_URL is deliberately left unset in this suite (see
+// events.test.js for the "set" path) — this mock lets us prove the producer
+// truly no-ops rather than merely being untested. "mock" prefix required so
+// Jest allows referencing it inside jest.mock(), which is hoisted.
+const mockSqsSend = jest.fn();
+
+jest.mock('@aws-sdk/client-sqs', () => {
+  const actual = jest.requireActual('@aws-sdk/client-sqs');
+  return {
+    ...actual,
+    SQSClient: jest.fn().mockImplementation(() => ({ send: mockSqsSend })),
+  };
+});
+
 // Mock Cognito verification so tests need no network / real pool. The
 // caller controls the resolved claims via verifyMock.
 jest.mock('aws-jwt-verify', () => {
@@ -135,6 +149,7 @@ function validBilling(overrides = {}) {
 beforeEach(() => {
   store = new Map();
   mockSend.mockReset();
+  mockSqsSend.mockReset();
   verifyMock.mockReset();
   mockSend.mockImplementation(async (command) => handleCommand(command));
 });
@@ -163,6 +178,14 @@ describe('GET /users/me', () => {
 
     expect(second.status).toBe(200);
     expect(second.body.createdAt).toBe(first.body.createdAt);
+  });
+
+  it('never calls SQS SendMessage when NOTIFICATIONS_QUEUE_URL is unset (no-op producer)', async () => {
+    await asUser(request(app).get('/users/me'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(process.env.NOTIFICATIONS_QUEUE_URL).toBeUndefined();
+    expect(mockSqsSend).not.toHaveBeenCalled();
   });
 });
 
