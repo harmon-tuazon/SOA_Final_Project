@@ -40,3 +40,38 @@ resource "aws_lb_listener" "http" {
     }
   }
 }
+
+# --- ALB 5xx alarm (optional, PRD platform/0011) -----------------------------
+#
+# Trips on the ALB's OWN 5xx responses (e.g. no healthy targets, listener
+# misconfiguration) rather than a target's application errors, since the
+# ELB dimension — not the Target dimension — is the load-balancer-level
+# signal. Sum > 5 over one 5-minute period, a small threshold that tolerates
+# an isolated blip but catches a sustained failure. Empty alerts_topic_arn
+# (the default) creates no alarm, so this module still plans/applies before
+# app-base's observability module/output exists.
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  count = var.alerts_topic_arn != "" ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-alb-5xx"
+  alarm_description   = "The shared ALB (${var.name_prefix}-alb) returned more than 5 HTTP 5xx responses in a 5-minute period."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    LoadBalancer = aws_lb.this.arn_suffix
+  }
+
+  alarm_actions = [var.alerts_topic_arn]
+  ok_actions    = [var.alerts_topic_arn]
+
+  tags = {
+    Name = "${var.name_prefix}-alb-5xx"
+  }
+}

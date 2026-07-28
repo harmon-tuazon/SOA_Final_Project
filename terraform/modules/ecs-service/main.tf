@@ -309,3 +309,38 @@ resource "aws_appautoscaling_policy" "cpu" {
     target_value = 70
   }
 }
+
+# --- CPU-high alarm (optional, PRD platform/0011) ----------------------------
+#
+# A natural companion to the autoscaling policy above: that policy already
+# targets 70% average CPU and should absorb ordinary load on its own, so this
+# alarm is set higher (85%) and sustained (3 consecutive 1-minute periods) —
+# it's meant to catch scaling that isn't keeping up (e.g. pinned at max
+# capacity), not to fire on every routine scale-out. Empty alerts_topic_arn
+# (the default) creates no alarm, so a service without it still works.
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  count = var.alerts_topic_arn != "" ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-${var.name}-cpu-high"
+  alarm_description   = "The ${var.name} service's average CPU utilization has been at or above 85% for 3 consecutive minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 3
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 85
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ClusterName = local.cluster_name
+    ServiceName = aws_ecs_service.this.name
+  }
+
+  alarm_actions = [var.alerts_topic_arn]
+  ok_actions    = [var.alerts_topic_arn]
+
+  tags = {
+    Name = "${var.name_prefix}-${var.name}-cpu-high"
+  }
+}

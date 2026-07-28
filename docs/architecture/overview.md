@@ -2,6 +2,68 @@
 
 How the system is shaped, starting from the network every workload runs in. This grows as services land — today it covers the network foundation ([PRD platform/0003](../action_plan/platform/0003-network.md)), the compute layer ([PRD platform/0004](../action_plan/platform/0004-ecs-alb.md)), and the permanent/destroyable split described below ([PRD platform/0006](../action_plan/platform/0006-base-edge-split.md), [ADR 0003](decisions/0003-base-edge-split.md)).
 
+## System diagram
+
+The picture below matches what's on `main` today: three ECS Fargate services (`order`, `product`, `user`) behind one ALB, each with its own DynamoDB table in `app-base`; the SPA on S3; Cognito called SPA-direct; and the SQS→Lambda→SNS notification pipeline. **One leg is not live yet** — the user service's own code already publishes `UserProfileCreated` (fire-and-forget, no-ops without a queue URL), but the `app-edge` wiring that injects `NOTIFICATIONS_QUEUE_URL` and grants its task role `sqs:SendMessage` is on the separate `feat/messaging-edge-wiring` branch, not yet merged — see [PRD platform/0008](../action_plan/platform/0008-messaging-factory.md) and [PRD platform/0011](../action_plan/platform/0011-rubric-quick-wins.md#3-scope) ("out of scope: merging `feat/messaging-edge-wiring`"). That edge is marked dotted and annotated below rather than shown as working.
+
+```mermaid
+flowchart TB
+    Shopper(("Shopper's browser"))
+
+    subgraph GH["GitHub: repo + Actions"]
+        CI["ci.yml (PR): lint/test, docker build, terraform plan (soa-ci-plan, OIDC)"]
+        CD["cd.yml (push to main): build/push images, terraform apply (soa-deployer, OIDC)"]
+    end
+
+    subgraph Base["terraform/app-base -- permanent, free"]
+        VPC["VPC: 2 public subnets, no NAT gateway"]
+        Cluster["ECS Fargate cluster"]
+        CognitoPool["Cognito user pool + app client"]
+        FrontendBucket["S3: SPA static website"]
+        OrderTable[("DynamoDB soa-order")]
+        ProductTable[("DynamoDB soa-product")]
+        UserTable[("DynamoDB soa-user")]
+        Queue["SQS notifications queue + DLQ"]
+        Worker["Lambda notification-worker"]
+        Topic["SNS notifications topic"]
+        Ops["SNS alerts topic + cost budget + CloudWatch alarms"]
+    end
+
+    subgraph Edge["terraform/app-edge -- destroyable, billable"]
+        ALB["Shared ALB, 1 HTTP listener, path routing"]
+        OrderSvc["ECS service: order (/orders*)"]
+        ProductSvc["ECS service: product (/products*)"]
+        UserSvc["ECS service: user (/users*)"]
+    end
+
+    CD -. "OIDC AssumeRoleWithWebIdentity, keyless, no long-lived keys" .-> Base
+    CD -.-> Edge
+
+    Shopper -- "static site over HTTP" --> FrontendBucket
+    Shopper -- "SignUp / ConfirmSignUp / InitiateAuth over HTTPS" --> CognitoPool
+    Shopper -- "REST calls, base URL from runtime config.json" --> ALB
+
+    ALB --> OrderSvc
+    ALB --> ProductSvc
+    ALB --> UserSvc
+
+    OrderSvc --> OrderTable
+    ProductSvc --> ProductTable
+    UserSvc --> UserTable
+    UserSvc -. "verify ID token against public JWKS" .-> CognitoPool
+
+    UserSvc -. "sqs:SendMessage on first profile create -- pending app-edge wiring on feat/messaging-edge-wiring" .-> Queue
+    Queue --> Worker
+    Worker --> Topic
+    Topic -- "confirmed email subscription" --> Subscriber(("Subscriber inbox"))
+
+    ALB -.-> Ops
+    OrderSvc -.-> Ops
+    ProductSvc -.-> Ops
+    UserSvc -.-> Ops
+    Worker -.-> Ops
+```
+
 ## Network
 
 One VPC, spread across **two public subnets in two Availability Zones**, with no NAT gateway:
@@ -35,6 +97,65 @@ The SPA never hardcodes the backend's API URL. It fetches a runtime `/config.jso
 
 **HTTPS (CloudFront + a custom domain) remains deferred** to one later, coherent PRD — an HTTPS-served page cannot call today's HTTP-only ALB (mixed content). **Application auth, however, is no longer deferred:** per [ADR 0005](decisions/0005-cognito-auth-over-http.md), the HTTPS-redirect-URI requirement belongs only to Cognito's hosted UI, not to Cognito's `SignUp`/`ConfirmSignUp`/`InitiateAuth` APIs — so the SPA authenticates **SPA-direct** against a Cognito user pool + public app client (`terraform/modules/cognito/`, wired into `app-base`, permanent and free), calling those APIs from a custom login UI with no hosted UI and no redirect URIs. The pool/client ids are non-secret and reach the SPA through the same runtime `config.json` seam described above.
 
+## Request-flow sequences
+
+Two representative flows through the system above: a synchronous CRUD round-trip, and the asynchronous sign-up/notification path.
+
+**Sync: placing an order.** The SPA never talks to DynamoDB directly — every write goes through the owning service's own table, per the compute layer's polyglot-persistence rule.
+
+```mermaid
+sequenceDiagram
+    actor Shopper
+    participant SPA as React SPA (S3)
+    participant ALB as Shared ALB
+    participant Order as order service (ECS Fargate)
+    participant DB as DynamoDB (soa-order)
+
+    Shopper->>SPA: Open catalog, place an order
+    SPA->>ALB: POST /orders {items, shippingAddress}
+    ALB->>Order: forward (path rule /orders*)
+    Order->>Order: validate body, compute total
+    Order->>DB: PutItem (order record)
+    DB-->>Order: 200 OK
+    Order-->>ALB: 201 Created + order
+    ALB-->>SPA: 201 Created + order
+    SPA-->>Shopper: Render order confirmation
+```
+
+**Async: sign-up to welcome email.** Registration and login are SPA-direct against Cognito (no hosted UI); the service itself never sees a password and never calls a Cognito API — it only verifies the ID token's signature against the pool's public JWKS. The last hop (user service → SQS) is annotated because it is not wired on `main` yet — see the note under "System diagram" above.
+
+```mermaid
+sequenceDiagram
+    actor Shopper
+    participant SPA as React SPA
+    participant Cognito as Cognito user pool
+    participant ALB as Shared ALB
+    participant User as user service (ECS Fargate)
+    participant DB as DynamoDB (soa-user)
+    participant SQS as SQS notifications queue
+    participant Lambda as notification-worker (Lambda)
+    participant SNS as SNS notifications topic
+
+    Shopper->>SPA: Register (email, password)
+    SPA->>Cognito: SignUp
+    Cognito-->>Shopper: 6-digit confirmation code (email)
+    Shopper->>SPA: Enter code
+    SPA->>Cognito: ConfirmSignUp
+    SPA->>Cognito: InitiateAuth (SRP)
+    Cognito-->>SPA: ID token + refresh token
+    SPA->>ALB: GET /users/me (Authorization: Bearer ID token)
+    ALB->>User: forward (path rule /users*)
+    User->>User: verify token signature against pool JWKS
+    User->>DB: lazy-upsert profile row (keyed by sub)
+    DB-->>User: 200 OK
+    User-->>SPA: 200 profile
+    Note over User,SQS: On first profile creation the service publishes<br/>UserProfileCreated (fire-and-forget). No-ops today:<br/>NOTIFICATIONS_QUEUE_URL + the sqs:SendMessage grant<br/>ship on the pending feat/messaging-edge-wiring branch.
+    User->>SQS: SendMessage(UserProfileCreated)
+    SQS->>Lambda: event source mapping (batch)
+    Lambda->>SNS: Publish(welcome message)
+    SNS-->>Shopper: Confirmed email subscription
+```
+
 ## No hardcoded endpoints (project-wide convention)
 
 Because the ALB is recreated on every teardown/spin-up cycle (see "Where this lives in Terraform" below), its DNS name is not stable across sessions. Every consumer — the React frontend (see Frontend above), and any service-to-service call — **reads the API base URL from config/env, never a literal ALB DNS name, IP, or endpoint in source**. This is a binding rule in [`service-contract.md`](../../.claude/rules/service-contract.md)'s application contract, enforced by a CI-visible grep for `elb.amazonaws.com` in `services/`/`functions/` (and, for the frontend, `frontend/src/`). It also makes a future stable domain (Route 53 custom domain, deferred — see [PRD platform/0006](../action_plan/platform/0006-base-edge-split.md) §3 out-of-scope) a one-value config change rather than a source change once it lands.
@@ -59,6 +180,7 @@ Neither config is the human-applied identity foundation in `terraform/` root. Se
 - [PRD platform/0004 — ECS + ALB](../action_plan/platform/0004-ecs-alb.md) — the plan and outcome for the compute layer and golden-path modules.
 - [PRD platform/0006 — Base/Edge Split](../action_plan/platform/0006-base-edge-split.md) — the plan and outcome for the base/edge split.
 - [PRD platform/0008 — Async Messaging Factory](../action_plan/platform/0008-messaging-factory.md) — the plan and outcome for the SQS → Lambda → SNS notification pipeline described above.
+- [PRD platform/0011 — Rubric Quick Wins](../action_plan/platform/0011-rubric-quick-wins.md) — the plan behind this doc's diagrams, the root `README.md`, the CI service-test step, and the CloudWatch alarms/cost budget.
 - [PRD frontend/0001 — SPA Scaffold + S3 Hosting](../action_plan/frontend/0001-spa-scaffold-and-hosting.md) — the plan and outcome for the frontend described above.
 - [operations/compute-layer.md](../operations/compute-layer.md) — how the cluster, ALB, IAM roles, and pipeline deploy work.
 - [operations/async-messaging.md](../operations/async-messaging.md) — the async branch runbook: shape, event contract, deploy path, DLQ, manual gates.

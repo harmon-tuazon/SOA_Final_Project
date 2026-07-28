@@ -117,3 +117,9 @@ variable "use_fargate_spot" {
   type        = bool
   default     = true
 }
+
+variable "alerts_topic_arn" {
+  description = "ARN of the ops-alerts SNS topic (PRD platform/0011), read by the app-edge root from app-base via terraform_remote_state. Used as the alarm_actions target for this service's CPU-high alarm. Empty (the default) creates no alarm, so a service without it still works — e.g. before app-base's observability module/output exists."
+  type        = string
+  default     = ""
+}

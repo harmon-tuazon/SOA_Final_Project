@@ -52,6 +52,14 @@ locals {
   cognito_user_pool_id = data.terraform_remote_state.base.outputs.cognito_user_pool_id
   cognito_client_id    = data.terraform_remote_state.base.outputs.cognito_client_id
   frontend_origin      = "http://${data.terraform_remote_state.base.outputs.frontend_website_endpoint}"
+
+  # Ops-alerts SNS topic (PRD platform/0011), owned by app-base's
+  # observability module. Used as the alarm_actions target for the shared
+  # ALB's 5xx alarm and each service's CPU-high alarm. try(...) so this config
+  # still plans before app-base has applied the new output (e.g. this PR's CI
+  # edge-plan): empty -> the count-guarded alarms create nothing, and the real
+  # ARN resolves once CD applies app-base first, then this config, on merge.
+  alerts_topic_arn = try(data.terraform_remote_state.base.outputs.alerts_topic_arn, "")
 }
 
 # --- Shared edge: ALB + HTTP listener (the only billable resource this
@@ -63,6 +71,7 @@ module "alb" {
   name_prefix       = var.name_prefix
   public_subnet_ids = local.public_subnet_ids
   alb_sg_id         = local.alb_sg_id
+  alerts_topic_arn  = local.alerts_topic_arn
 }
 
 # --- Services ----------------------------------------------------------------
@@ -96,6 +105,7 @@ module "alb" {
 #   listener_arn        = module.alb.listener_arn
 #   execution_role_arn  = local.execution_role_arn
 #   boundary_arn        = local.boundary_arn
+#   alerts_topic_arn    = local.alerts_topic_arn
 # }
 
 # order service (PRD order/0001) — the first service on the shared listener,
@@ -121,6 +131,7 @@ module "order_service" {
   listener_arn       = module.alb.listener_arn
   execution_role_arn = local.execution_role_arn
   boundary_arn       = local.boundary_arn
+  alerts_topic_arn   = local.alerts_topic_arn
 }
 
 # product service (PRD product/0001) — the second service on the shared
@@ -147,6 +158,7 @@ module "product_service" {
   listener_arn       = module.alb.listener_arn
   execution_role_arn = local.execution_role_arn
   boundary_arn       = local.boundary_arn
+  alerts_topic_arn   = local.alerts_topic_arn
 }
 
 # user service (PRD user/0001); priority 120 (order holds 100, product holds
@@ -179,4 +191,5 @@ module "user_service" {
   listener_arn       = module.alb.listener_arn
   execution_role_arn = local.execution_role_arn
   boundary_arn       = local.boundary_arn
+  alerts_topic_arn   = local.alerts_topic_arn
 }

@@ -147,3 +147,20 @@ module "notification_worker" {
   publish_topic_arn = module.notifications.topic_arn
   boundary_arn      = local.boundary_arn
 }
+
+# --- Monitoring: ops-alerts topic + cost budget + Lambda errors alarm
+#     (PRD platform/0011) -----------------------------------------------------
+#
+# Free-tier: first 10 CloudWatch alarms and first 2 AWS Budgets per account
+# are free; SNS email delivery is negligible. Lives in app-base (not
+# app-edge) so the alerts topic and budget survive every app-edge teardown —
+# app-edge's ALB/ecs-service alarms read the topic ARN back via
+# terraform_remote_state rather than creating their own topic.
+module "observability" {
+  source = "../modules/observability"
+
+  name_prefix          = var.name_prefix
+  notification_email   = var.notification_email
+  budget_limit_amount  = var.budget_limit_amount
+  lambda_function_name = module.notification_worker.function_name
+}
