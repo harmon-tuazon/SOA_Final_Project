@@ -9,12 +9,20 @@ on:
       # 0002) AND builds/deploys service images. The identity foundation in
       # terraform/ root and bootstrap/ are human-applied. Trigger on infra
       # changes to either config or the shared modules they both use,
-      # application code changes (new commit SHA -> new image -> rolling
-      # deploy), and this workflow.
+      # service application code changes (new commit SHA -> new image ->
+      # rolling deploy), function code changes (functions/** — Lambda code
+      # has no separate packaging step in this pipeline: Terraform's
+      # archive_file zips functions/<name>/index.js and its source_code_hash
+      # drives redeploy in the app-base apply, PRD platform/0008 §5.1(c)/(h)
+      # deviation — without this path, a commit touching only
+      # functions/notification-worker/index.js would never trigger CD, the
+      # apply would never run, and the deployed Lambda would silently keep
+      # stale code while CI stayed green), and this workflow.
       - 'terraform/app-base/**'
       - 'terraform/app-edge/**'
       - 'terraform/modules/**'
       - 'services/**'
+      - 'functions/**'
       - '.github/workflows/cd.yml'
 
 permissions:
@@ -29,6 +37,16 @@ env:
   # as TF_STATE_BUCKET used for `terraform init -backend-config`. Harmless
   # for app-base steps, which don't declare this variable.
   TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
+  # Optional demo inbox for the SNS email subscription (PRD platform/0008).
+  # Only terraform/app-base declares `notification_email`; if the
+  # NOTIFICATION_EMAIL repo variable is unset/empty, app-base's plan is
+  # written to simply not create the subscription (queue/DLQ/topic/Lambda
+  # still deploy) — see docs/to-dos/set-notification-email-variable.md.
+  # Harmless for app-edge steps, which don't declare this variable: Terraform
+  # only warns on an undeclared TF_VAR_* env var (it errors only on an
+  # undeclared -var CLI flag), same pattern as TF_VAR_state_bucket above.
+  TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
 
 jobs:
   terraform-apply:
@@ -158,12 +176,23 @@ jobs:
       # frontend-only redeploy never clobbers the live API URL. The ALB
       # always exists after this apply (even with zero services behind it),
       # so this step is safe unconditionally.
+      # Also publishes the Cognito user pool id and public app client id
+      # (PRD platform/0009 §5.1(d)). Both are non-secret by design: a pool
+      # id and a PUBLIC app client id (no client secret) are meant to be
+      # embedded in browser code, so they ride the same runtime-config seam
+      # as the API URL rather than a GitHub secret. No region key is needed
+      # -- amazon-cognito-identity-js derives it from the pool id's prefix.
+      # Built with printf (not a heredoc) so there's no delimiter line for
+      # the YAML block scalar's indentation to interfere with.
       - name: Refresh frontend config.json with current API URL
         run: |
           set -euo pipefail
           ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
           BUCKET=$(terraform -chdir=terraform/app-base output -raw frontend_bucket_name)
-          echo "{\"apiBaseUrl\":\"http://$ALB\"}" > config.json
+          POOL=$(terraform -chdir=terraform/app-base output -raw cognito_user_pool_id)
+          CLIENT=$(terraform -chdir=terraform/app-base output -raw cognito_client_id)
+          printf '{"apiBaseUrl":"http://%s","cognitoUserPoolId":"%s","cognitoClientId":"%s"}' \
+            "$ALB" "$POOL" "$CLIENT" > config.json
           aws s3 cp config.json "s3://$BUCKET/config.json" \
             --content-type application/json \
             --cache-control no-cache
@@ -183,3 +212,183 @@ jobs:
             aws ecs wait services-stable --cluster "$CLUSTER" --services "soa-$name"
             echo "::endgroup::"
           done
+
+      # --- Smoke-test the sync path (order -> product via Service Connect) -
+      # Proves ECS Service Connect end to end (PRD platform/0012 §4.8/§8):
+      # the order service's POST /orders is supposed to reach the product
+      # service over the internal `http://product:3000` logical name (never
+      # a hardcoded endpoint, injected as PRODUCT_SERVICE_URL) to validate
+      # each line item's product id before saving the order. Neither
+      # services/order/src/app.js nor services/product/src/app.js has an
+      # auth gate (CORS only, no Cognito check on these two routes — unlike
+      # the user service), so this is a plain curl round trip through the
+      # live ALB with no token to mint.
+      #
+      # Seed one product, then place two orders against it:
+      #   - a REAL product id  -> order's product lookup succeeds (200 from
+      #     product) -> order is saved -> 2xx
+      #   - a BOGUS product id -> order's product lookup 404s -> order is
+      #     rejected -> 4xx
+      # The bogus-order assertion is what actually proves the inter-service
+      # call happened: services/order/src/orders.js's own request-body
+      # validation only checks that productId is a non-empty string — it has
+      # no idea whether the id is real. A 4xx here can only come from order
+      # having called out to product over Service Connect and gotten a 404
+      # back; if that call weren't happening (or weren't enforced), this
+      # request would 2xx same as the valid one.
+      - name: Smoke-test the sync path (order -> product via Service Connect)
+        run: |
+          set -euo pipefail
+
+          ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
+          BASE="http://$ALB"
+
+          echo "::group::seed a product"
+          PRODUCT_BODY=$(jq -n '{name:"CD Smoke Test Product",price:9.99,category:"cd-smoke-test"}')
+          product_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/products" \
+            -H 'Content-Type: application/json' -d "$PRODUCT_BODY")
+          product_status=$(echo "$product_response" | tail -n1)
+          product_body=$(echo "$product_response" | sed '$d')
+          echo "POST /products -> $product_status"
+
+          if [ "$product_status" != "201" ]; then
+            echo "::error::Seeding the smoke-test product failed (HTTP $product_status): $product_body"
+            exit 1
+          fi
+
+          PRODUCT_ID=$(echo "$product_body" | jq -r '.id')
+          echo "seeded product id: $PRODUCT_ID"
+          echo "::endgroup::"
+
+          SHIPPING='{"line1":"1 Main St","city":"Testville","postalCode":"00000","country":"US"}'
+
+          echo "::group::place a valid order (real product id -> expect 2xx)"
+          valid_body=$(jq -n --arg pid "$PRODUCT_ID" --argjson addr "$SHIPPING" \
+            '{customerId:"cd-smoke-test",items:[{productId:$pid,name:"CD Smoke Test Product",unitPrice:9.99,qty:1}],shippingAddress:$addr}')
+          valid_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/orders" \
+            -H 'Content-Type: application/json' -d "$valid_body")
+          valid_status=$(echo "$valid_response" | tail -n1)
+          valid_resp_body=$(echo "$valid_response" | sed '$d')
+          echo "POST /orders (real product) -> $valid_status"
+          echo "::endgroup::"
+
+          echo "::group::place a bogus order (nonexistent product id -> expect 4xx)"
+          bogus_body=$(jq -n --argjson addr "$SHIPPING" \
+            '{customerId:"cd-smoke-test",items:[{productId:"00000000-0000-0000-0000-000000000000",name:"CD Smoke Test Product",unitPrice:9.99,qty:1}],shippingAddress:$addr}')
+          bogus_response=$(curl -s -w '\n%{http_code}' -X POST "$BASE/orders" \
+            -H 'Content-Type: application/json' -d "$bogus_body")
+          bogus_status=$(echo "$bogus_response" | tail -n1)
+          bogus_resp_body=$(echo "$bogus_response" | sed '$d')
+          echo "POST /orders (bogus product) -> $bogus_status"
+          echo "::endgroup::"
+
+          # Cleanup: DELETE /products/:id exists and is trivial to call, so
+          # remove the seeded product. There is no DELETE /orders/:id route
+          # in the order-service contract, so the two orders created above
+          # stay in DynamoDB — acceptable demo test data per the PRD.
+          echo "::group::cleanup: delete the seeded product"
+          delete_status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/products/$PRODUCT_ID")
+          echo "DELETE /products/$PRODUCT_ID -> $delete_status"
+          echo "::endgroup::"
+
+          failed=""
+          if [ "${valid_status:0:1}" != "2" ]; then
+            echo "::error::Valid order for a real seeded product ($PRODUCT_ID) returned HTTP $valid_status (expected 2xx): $valid_resp_body"
+            failed="1"
+          fi
+          if [ "${bogus_status:0:1}" != "4" ]; then
+            echo "::error::Order for a nonexistent product id returned HTTP $bogus_status (expected 4xx): $bogus_resp_body -- this is the assertion proving order actually calls product over Service Connect (http://product:3000); anything other than 4xx means the inter-service validation call didn't happen or isn't enforced."
+            failed="1"
+          fi
+
+          if [ -n "$failed" ]; then
+            exit 1
+          fi
+
+          echo "Sync smoke test passed: order -> product Service Connect call proven (valid order=$valid_status, bogus order=$bogus_status)."
+
+      # --- Smoke-test the async path (SQS -> Lambda) -----------------------
+      # Proves the SQS->Lambda half of the notification pipeline end to end
+      # on every deploy (PRD platform/0008 §4.8): publish one synthetic
+      # UserProfileCreated event and look for evidence the worker ran. The
+      # email hop (SNS -> inbox) is deliberately NOT asserted here — the
+      # subscription needs a one-time human confirmation click
+      # (docs/to-dos/confirm-sns-subscription.md), so only the queue/worker
+      # leg is provable from CD.
+      #
+      # Guarded: app-base only gains the `notifications_queue_url` output
+      # once PRD platform/0008's Terraform has landed. Keep CD robust against
+      # an app-base state that predates it (shouldn't happen once this PR
+      # merges) by skipping gracefully instead of failing the deploy on a
+      # missing output.
+      #
+      # The Lambda's name is the literal `soa-notification-worker`, not
+      # derived from $SERVICES (functions aren't ECS services and aren't
+      # part of that discovery loop) — it's the fixed `soa-<name>` name from
+      # the service/function naming convention for this one worker.
+      #
+      # If soa-deployer still lacks `lambda:*`
+      # (docs/to-dos/admin-apply-lambda-grant.md not yet actioned), this step
+      # is never reached: the app-base apply above already failed at
+      # `lambda:CreateFunction`. That fail-closed behaviour is the intended
+      # proof in PRD platform/0008 §4.6, not a bug in this step.
+      - name: Smoke-test the async path (SQS -> Lambda)
+        run: |
+          set -euo pipefail
+
+          QURL=$(terraform -chdir=terraform/app-base output -raw notifications_queue_url 2>/dev/null || true)
+          if [ -z "$QURL" ]; then
+            echo "::notice::notifications_queue_url output not found (pre-platform/0008 app-base state) — skipping the async smoke test."
+            exit 0
+          fi
+
+          FN=soa-notification-worker
+          LOG_GROUP="/aws/lambda/$FN"
+
+          # Captured BEFORE sending, so the log filter below only matches an
+          # invocation this run's message caused, not a stale prior one.
+          START_MS=$(date +%s000)
+
+          echo "::group::send synthetic UserProfileCreated event"
+          aws sqs send-message --queue-url "$QURL" --message-body '{"type":"UserProfileCreated","userId":"cd-smoke-test","email":"cd-smoke@example.invalid","displayName":"CD smoke test","occurredAt":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+          echo "::endgroup::"
+
+          echo "::group::wait for a worker invocation in $LOG_GROUP"
+          found=""
+          for attempt in $(seq 1 12); do
+            count=$(aws logs filter-log-events --log-group-name "$LOG_GROUP" --start-time "$START_MS" --query 'length(events)' --output text 2>/dev/null || echo 0)
+            if [ "$count" != "0" ]; then
+              found="1"
+              break
+            fi
+            echo "no invocation yet (attempt $attempt/12)"
+            [ "$attempt" -lt 12 ] && sleep 10
+          done
+          echo "::endgroup::"
+
+          if [ -z "$found" ]; then
+            echo "::error::No CloudWatch Logs invocation seen in $LOG_GROUP within ~2 minutes of the smoke-test send — the SQS->Lambda path is not proven working."
+            exit 1
+          fi
+
+          # An invocation happening isn't proof it succeeded: START/END/REPORT
+          # lines and the handler's own console.warn (skip) lines all count
+          # toward the check above, so a broken sns:Publish would still pass
+          # it. Re-filter the same window for the handler's exact SNS
+          # publish-failure marker (functions/notification-worker/index.js:
+          # `console.error('Failed to publish notification to SNS; will
+          # retry', ...)`) to prove the invocation both happened AND
+          # processed the synthetic event without hitting that error path.
+          # The email hop (SNS -> confirmed inbox) remains unasserted — see
+          # the header comment above.
+          echo "::group::check for the worker's SNS publish-failure marker"
+          ERROR_PATTERN="Failed to publish notification to SNS"
+          error_count=$(aws logs filter-log-events --log-group-name "$LOG_GROUP" --start-time "$START_MS" --filter-pattern "\"$ERROR_PATTERN\"" --query 'length(events)' --output text 2>/dev/null || echo 0)
+          echo "::endgroup::"
+
+          if [ "$error_count" != "0" ]; then
+            echo "::error::Worker logged its SNS publish-failure marker (\"$ERROR_PATTERN\") for the smoke-test invocation in $LOG_GROUP — the Lambda ran but sns:Publish is failing."
+            exit 1
+          fi
+
+          echo "Async smoke test passed: worker invocation observed in $LOG_GROUP with no SNS publish-failure marker."

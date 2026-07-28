@@ -19,6 +19,21 @@ export class ApiError extends Error {
   }
 }
 
+// api.ts is hook-free (it's called from plain functions, not components), so
+// it can't call useAuth() itself. Instead AuthProvider registers a
+// token-getter function here (in an effect, on mount) that apiFetch calls at
+// request time to attach a Bearer token when a session exists. No token
+// registered/available -> no Authorization header, so public endpoints (and
+// endpoints called before auth initializes) keep working unchanged.
+type TokenGetter = () => Promise<string | null>;
+
+let getAuthToken: TokenGetter = () => Promise.resolve(null);
+
+/** Called by AuthProvider to wire in the current Cognito session's id-token getter. */
+export function setAuthTokenGetter(fn: TokenGetter): void {
+  getAuthToken = fn;
+}
+
 /**
  * Pulls a human-readable message out of a thrown error: prefers a service's
  * `{ error: string }` JSON body (e.g. the 409 a stock adjustment returns),
@@ -56,6 +71,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
+  const token = await getAuthToken().catch(() => null);
+
   let response: Response;
   try {
     response = await fetch(url, {
@@ -63,6 +80,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init?.headers,
       },
     });

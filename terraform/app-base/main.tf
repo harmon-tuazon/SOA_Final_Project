@@ -65,6 +65,15 @@ module "frontend" {
   account_id  = data.aws_caller_identity.current.account_id
 }
 
+# Application identity provider (PRD platform/0009). Permanent and free:
+# user accounts must survive every app-edge teardown, and the pool costs
+# nothing below 50k MAU.
+module "cognito" {
+  source = "../modules/cognito"
+
+  name_prefix = var.name_prefix
+}
+
 # --- Service tables ----------------------------------------------------------
 #
 # Each service adds a `data` module block (its own DynamoDB table) below —
@@ -99,4 +108,59 @@ module "product_table" {
   name_prefix = var.name_prefix
   name        = "product"
   hash_key    = "id"
+}
+
+# user service (PRD user/0001). Permanent: profile + billing data survives
+# every app-edge teardown, and the pipeline is denied DeleteTable. The hash
+# key is the Cognito `sub` — Cognito owns identity, this table owns profile.
+module "user_table" {
+  source = "../modules/data"
+
+  name_prefix = var.name_prefix
+  name        = "user"
+  hash_key    = "userId"
+}
+
+# --- Async branch: SQS -> Lambda -> SNS (PRD platform/0008) ------------------
+#
+# The event-driven half of the hybrid architecture (ADR 0001). Deliberately
+# lives here in app-base, not app-edge: it is entirely free-tier and
+# event-driven (no idle cost either way), so there is no reason for it to
+# churn with the billable edge, and it must survive an `app-edge` teardown so
+# the queue/topic/subscription stay intact between sessions.
+
+module "notifications" {
+  source = "../modules/messaging"
+
+  name_prefix        = var.name_prefix
+  name               = "notifications"
+  notification_email = var.notification_email
+}
+
+module "notification_worker" {
+  source = "../modules/lambda"
+
+  name_prefix       = var.name_prefix
+  name              = "notification-worker"
+  source_file       = "${path.module}/../../functions/notification-worker/index.js"
+  source_queue_arn  = module.notifications.queue_arn
+  publish_topic_arn = module.notifications.topic_arn
+  boundary_arn      = local.boundary_arn
+}
+
+# --- Monitoring: ops-alerts topic + cost budget + Lambda errors alarm
+#     (PRD platform/0011) -----------------------------------------------------
+#
+# Free-tier: first 10 CloudWatch alarms and first 2 AWS Budgets per account
+# are free; SNS email delivery is negligible. Lives in app-base (not
+# app-edge) so the alerts topic and budget survive every app-edge teardown —
+# app-edge's ALB/ecs-service alarms read the topic ARN back via
+# terraform_remote_state rather than creating their own topic.
+module "observability" {
+  source = "../modules/observability"
+
+  name_prefix          = var.name_prefix
+  notification_email   = var.notification_email
+  budget_limit_amount  = var.budget_limit_amount
+  lambda_function_name = module.notification_worker.function_name
 }

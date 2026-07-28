@@ -40,7 +40,13 @@ The CI/CD pipeline discovers services by listing `services/*` (excluding `_templ
 
 ## What the platform provides (so the developer doesn't)
 
-The shared cluster, single ALB + listener, network (VPC/subnets), ECS task **execution** role, ECR, the CI/CD pipeline, and all IAM/least-privilege. A service author never touches VPCs, IAM, the ALB, or the pipeline — only the two module blocks (usually written by `/new-service`) and their app code.
+The shared cluster, single ALB + listener, network (VPC/subnets), ECS task **execution** role, ECR, **internal service discovery (ECS Service Connect + a shared mesh SG)**, the CI/CD pipeline, and all IAM/least-privilege. A service author never touches VPCs, IAM, the ALB, or the pipeline — only the two module blocks (usually written by `/new-service`) and their app code.
+
+## Talking to another service (ECS Service Connect)
+
+Every service is **discoverable by a stable logical name** via **ECS Service Connect** (PRD platform/0012, [ADR 0006](../../docs/architecture/decisions/0006-service-discovery.md)): a service named `<name>` is reachable *in-cluster* at **`http://<name>:<port>`** (e.g. `http://product:3000`), and all tasks share a mesh security group that permits this internal traffic on the app port. The `ecs-service` module enables Service Connect automatically — a new service gets it for free, both as a caller and as a callee.
+
+To **call** another service, read the peer's base URL from an **injected env var** — never hardcode it (same rule as the API base URL). The Terraform block injects e.g. `PRODUCT_SERVICE_URL = "http://product:3000"`; the code reads `process.env.PRODUCT_SERVICE_URL`. The Service Connect name is *stable* (unlike the churning ALB DNS), but the read-from-env rule still holds so no endpoint is ever baked into source. The **order service's product-existence check on `POST /orders`** is the reference example (validate via the peer, fail closed if it's unreachable).
 
 ## Guardrails (non-negotiable)
 

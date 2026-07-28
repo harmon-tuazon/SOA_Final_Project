@@ -23,3 +23,15 @@ variable "public_subnet_cidrs" {
   type        = list(string)
   default     = ["10.0.0.0/24", "10.0.1.0/24"]
 }
+
+variable "notification_email" {
+  description = "Email address(es) subscribed to the notifications SNS topic (PRD platform/0008): a single address or a comma-separated list (\"a@x.ca,b@x.ca\") — one subscription per address. Set via TF_VAR_notification_email from the NOTIFICATION_EMAIL GitHub Actions variable in CD. Empty (the default) skips creating subscriptions entirely, so this config still plans/applies before the address is set — see docs/to-dos/set-notification-email-variable.md."
+  type        = string
+  default     = ""
+}
+
+variable "budget_limit_amount" {
+  description = "Monthly cost budget limit, in USD (PRD platform/0011). Kept as a variable (not hardcoded) so it's a one-value change to adjust the spend ceiling."
+  type        = string
+  default     = "30"
+}

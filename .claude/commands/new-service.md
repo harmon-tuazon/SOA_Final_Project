@@ -19,6 +19,7 @@ Ask, one at a time, and recommend a default for each:
 3. **Main entity + key fields** — e.g. "an order: `id`, `customerId`, `items`, `status`". The **partition key** is usually `id`.
 4. **Routes** — the REST endpoints (e.g. `GET /orders`, `POST /orders`, `POST /orders/:id/cancel`). Everything sits under one path prefix.
 5. **Any background/async work?** — e.g. "email a confirmation when an order is placed." If yes, note it as a **follow-up** (async workers — SQS/Lambda — are a separate factory piece not yet built); scaffold the sync service now.
+6. **Does it call any other service?** — e.g. "order checks the product exists." If yes, note which peer(s). Service discovery is automatic (ECS Service Connect); the caller just reads the peer's URL from an injected env var and calls it — see Step 2 and [service-contract.md](../rules/service-contract.md).
 
 ## Step 2 — Derive the infrastructure (you, silently)
 
@@ -28,6 +29,7 @@ From the answers, derive (per the [service contract](../rules/service-contract.m
 - **ALB route:** `/<name>*` (or the resource noun), a **unique listener rule priority** (read `terraform/app-edge/main.tf` for the highest existing priority and add 10; start at 100).
 - **Env var:** `<NAME>_TABLE` (upper snake), injected with the conventional table name `"<name_prefix>-<name>"`.
 - **Port:** 3000.
+- **Service Connect:** automatic — the `ecs-service` module enables it, so the service is discoverable in-cluster at `http://<name>:3000` and joins the shared mesh SG (no extra block). If it **calls** a peer (step 6), inject `<PEER>_SERVICE_URL = "http://<peer>:3000"` into its `env` map and read `process.env.<PEER>_SERVICE_URL` in code — never hardcode the endpoint. Reference: the order service's `PRODUCT_SERVICE_URL` product check.
 
 ## Step 3 — Generate the per-service PRD (then STOP)
 

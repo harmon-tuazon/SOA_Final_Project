@@ -46,3 +46,43 @@ output "frontend_website_endpoint" {
   description = "HTTP website endpoint the SPA is served from (S3 static website hosting)."
   value       = module.frontend.website_endpoint
 }
+
+output "cognito_user_pool_id" {
+  description = "ID of the application Cognito user pool. Non-secret — published to the SPA in config.json by cd.yml, and read by app-edge via terraform_remote_state for the user service's env."
+  value       = module.cognito.user_pool_id
+}
+
+output "cognito_client_id" {
+  description = "ID of the public SPA app client (no secret). Non-secret — published to the SPA in config.json by cd.yml."
+  value       = module.cognito.client_id
+}
+
+output "notifications_queue_url" {
+  description = "URL of the notifications SQS queue (PRD platform/0008). Read by app-edge via terraform_remote_state to inject NOTIFICATIONS_QUEUE_URL into the user service, and by cd.yml's smoke-test step."
+  value       = module.notifications.queue_url
+}
+
+output "notifications_queue_arn" {
+  description = "ARN of the notifications SQS queue. Read by app-edge via terraform_remote_state to scope the user service's task-role sqs:SendMessage to this queue only."
+  value       = module.notifications.queue_arn
+}
+
+output "notifications_topic_arn" {
+  description = "ARN of the notifications SNS topic."
+  value       = module.notifications.topic_arn
+}
+
+output "alerts_topic_arn" {
+  description = "ARN of the ops-alerts SNS topic (PRD platform/0011). Read by app-edge via terraform_remote_state to use as an alarm_actions target for the ALB 5xx alarm and each service's ECS CPU-high alarm."
+  value       = module.observability.alerts_topic_arn
+}
+
+output "service_connect_namespace_arn" {
+  description = "ARN of the Service Connect HTTP namespace (PRD platform/0012). Read by app-edge via terraform_remote_state; each ecs-service instance's service_connect_configuration joins this namespace."
+  value       = module.cluster.service_connect_namespace_arn
+}
+
+output "mesh_sg_id" {
+  description = "ID of the shared internal mesh security group (PRD platform/0012). Read by app-edge via terraform_remote_state; appended to every ecs-service instance's task security groups alongside its own ALB-scoped SG."
+  value       = module.cluster.mesh_sg_id
+}

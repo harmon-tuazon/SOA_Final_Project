@@ -9,6 +9,7 @@ All project documentation lives under `docs/` and follows a fixed taxonomy. Keep
 | `docs/architecture/` | How the system is shaped and what it does; component responsibilities, service interactions, data/request flows, and the requirements (functional + NFRs) it meets. Immutable ADRs live in `docs/architecture/decisions/`. | `overview.md`, service-interaction diagrams, use cases, NFRs, `decisions/0001-platform-and-tooling.md` |
 | `docs/action_plan/` | PRDs — plans of record written and approved *before* executing substantial work, **organized per microservice** (plus a `platform/` folder for cross-cutting infra). Governed by [`action-plan.md`](action-plan.md) (structure, numbering, approval gate). Written by the main session, which assigns the agents. | `platform/0001-terraform-foundation.md`, `<service>/0001-service-scaffold.md` |
 | `docs/operations/` | Everything about running the system — local setup, CI/CD pipeline, AWS account setup, and operational procedures. | local dev (Docker Compose), pipeline stages, GitHub OIDC setup, teardown, secret rotation, cost check |
+| `docs/to-dos/` | Pending **manual, out-of-band, or deployment-gated actions** a human must still perform — admin applies, inbox confirmations, GitHub settings. Governed by [`deployment-todos.md`](deployment-todos.md) (metadata block, completion flow). | `admin-apply-lambda-grant.md`, `confirm-sns-subscription.md` |
 
 `docs/README.md` is the index — every new top-level doc gets a line there.
 

@@ -43,6 +43,39 @@ locals {
   cluster_id         = data.terraform_remote_state.base.outputs.cluster_id
   execution_role_arn = data.terraform_remote_state.base.outputs.execution_role_arn
   alb_sg_id          = data.terraform_remote_state.base.outputs.alb_sg_id
+
+  # Cognito identifiers (PRD platform/0009) and the SPA's origin — all
+  # non-secret. Read by the user service (PRD user/0001) for JWKS-based token
+  # verification and CORS: the SPA sends an Authorization header on every
+  # call, which makes every cross-origin request preflighted, so
+  # CORS_ALLOWED_ORIGIN must be correct for the app to work at all.
+  cognito_user_pool_id = data.terraform_remote_state.base.outputs.cognito_user_pool_id
+  cognito_client_id    = data.terraform_remote_state.base.outputs.cognito_client_id
+  frontend_origin      = "http://${data.terraform_remote_state.base.outputs.frontend_website_endpoint}"
+
+  # Ops-alerts SNS topic (PRD platform/0011), owned by app-base's
+  # observability module. Used as the alarm_actions target for the shared
+  # ALB's 5xx alarm and each service's CPU-high alarm. try(...) so this config
+  # still plans before app-base has applied the new output (e.g. this PR's CI
+  # edge-plan): empty -> the count-guarded alarms create nothing, and the real
+  # ARN resolves once CD applies app-base first, then this config, on merge.
+  alerts_topic_arn = try(data.terraform_remote_state.base.outputs.alerts_topic_arn, "")
+
+  # The async branch's notifications queue (PRD platform/0008) — the producer
+  # needs the URL as env (to call sqs:SendMessage) and the ARN to scope its
+  # task role's SendMessage permission to this queue only.
+  notifications_queue_url = data.terraform_remote_state.base.outputs.notifications_queue_url
+  notifications_queue_arn = data.terraform_remote_state.base.outputs.notifications_queue_arn
+
+  # Service Connect namespace + shared mesh SG (PRD platform/0012), owned by
+  # app-base's ecs-cluster module. try(...) so this config still plans before
+  # app-base has applied the new outputs (e.g. this PR's CI edge-plan) — same
+  # pattern as alerts_topic_arn above: empty/null -> every ecs-service
+  # instance's dynamic service_connect_configuration/mesh SG simply isn't
+  # configured, so validate/plan still succeed, and the real values resolve
+  # once CD applies app-base first, then this config, on merge.
+  service_connect_namespace_arn = try(data.terraform_remote_state.base.outputs.service_connect_namespace_arn, "")
+  mesh_sg_id                    = try(data.terraform_remote_state.base.outputs.mesh_sg_id, "")
 }
 
 # --- Shared edge: ALB + HTTP listener (the only billable resource this
@@ -54,6 +87,7 @@ module "alb" {
   name_prefix       = var.name_prefix
   public_subnet_ids = local.public_subnet_ids
   alb_sg_id         = local.alb_sg_id
+  alerts_topic_arn  = local.alerts_topic_arn
 }
 
 # --- Services ----------------------------------------------------------------
@@ -87,6 +121,9 @@ module "alb" {
 #   listener_arn        = module.alb.listener_arn
 #   execution_role_arn  = local.execution_role_arn
 #   boundary_arn        = local.boundary_arn
+#   alerts_topic_arn    = local.alerts_topic_arn
+#   service_connect_namespace_arn = local.service_connect_namespace_arn
+#   mesh_sg_id                    = local.mesh_sg_id
 # }
 
 # order service (PRD order/0001) — the first service on the shared listener,
@@ -96,22 +133,32 @@ module "alb" {
 module "order_service" {
   source = "../modules/ecs-service"
 
-  name_prefix        = var.name_prefix
-  region             = var.region
-  name               = "order"
-  port               = 3000
-  image_tag          = var.image_tag
-  route              = "/orders*"
-  priority           = 100
-  env                = { ORDER_TABLE = "${var.name_prefix}-order" }
-  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-order"]
-  vpc_id             = local.vpc_id
-  public_subnet_ids  = local.public_subnet_ids
-  cluster_id         = local.cluster_id
-  alb_sg_id          = local.alb_sg_id
-  listener_arn       = module.alb.listener_arn
-  execution_role_arn = local.execution_role_arn
-  boundary_arn       = local.boundary_arn
+  name_prefix = var.name_prefix
+  region      = var.region
+  name        = "order"
+  port        = 3000
+  image_tag   = var.image_tag
+  route       = "/orders*"
+  priority    = 100
+  env = {
+    ORDER_TABLE = "${var.name_prefix}-order"
+    # Product-existence check on order placement (PRD platform/0012): a
+    # stable Service-Connect logical address, not a literal external
+    # endpoint or the churning ALB DNS — read by the app from env, never
+    # hardcoded in source (service-contract.md).
+    PRODUCT_SERVICE_URL = "http://product:3000"
+  }
+  table_arns                    = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-order"]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
 }
 
 # product service (PRD product/0001) — the second service on the shared
@@ -122,20 +169,62 @@ module "order_service" {
 module "product_service" {
   source = "../modules/ecs-service"
 
-  name_prefix        = var.name_prefix
-  region             = var.region
-  name               = "product"
-  port               = 3000
-  image_tag          = var.image_tag
-  route              = "/products*"
-  priority           = 110
-  env                = { PRODUCT_TABLE = "${var.name_prefix}-product" }
-  table_arns         = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
-  vpc_id             = local.vpc_id
-  public_subnet_ids  = local.public_subnet_ids
-  cluster_id         = local.cluster_id
-  alb_sg_id          = local.alb_sg_id
-  listener_arn       = module.alb.listener_arn
-  execution_role_arn = local.execution_role_arn
-  boundary_arn       = local.boundary_arn
+  name_prefix                   = var.name_prefix
+  region                        = var.region
+  name                          = "product"
+  port                          = 3000
+  image_tag                     = var.image_tag
+  route                         = "/products*"
+  priority                      = 110
+  env                           = { PRODUCT_TABLE = "${var.name_prefix}-product" }
+  table_arns                    = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-product"]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
+}
+
+# user service (PRD user/0001); priority 120 (order holds 100, product holds
+# 110; the next service takes 130). No task-role change for Cognito is needed — JWKS
+# verification is an unauthenticated HTTPS fetch of public keys, not an AWS
+# API call, so the boundary's cognito-idp:* allowances go unused by design.
+module "user_service" {
+  source = "../modules/ecs-service"
+
+  name_prefix = var.name_prefix
+  region      = var.region
+  name        = "user"
+  port        = 3000
+  image_tag   = var.image_tag
+  route       = "/users*"
+  priority    = 120
+
+  env = {
+    USER_TABLE              = "${var.name_prefix}-user"
+    COGNITO_USER_POOL_ID    = local.cognito_user_pool_id
+    COGNITO_CLIENT_ID       = local.cognito_client_id
+    CORS_ALLOWED_ORIGIN     = local.frontend_origin
+    NOTIFICATIONS_QUEUE_URL = local.notifications_queue_url
+  }
+
+  table_arns = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-user"]
+  # First producer on the async branch (PRD platform/0008) — fire-and-forget
+  # publish on first profile creation; scoped to this queue only.
+  sqs_send_arns                 = [local.notifications_queue_arn]
+  vpc_id                        = local.vpc_id
+  public_subnet_ids             = local.public_subnet_ids
+  cluster_id                    = local.cluster_id
+  alb_sg_id                     = local.alb_sg_id
+  listener_arn                  = module.alb.listener_arn
+  execution_role_arn            = local.execution_role_arn
+  boundary_arn                  = local.boundary_arn
+  alerts_topic_arn              = local.alerts_topic_arn
+  service_connect_namespace_arn = local.service_connect_namespace_arn
+  mesh_sg_id                    = local.mesh_sg_id
 }

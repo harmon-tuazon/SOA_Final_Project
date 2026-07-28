@@ -21,3 +21,13 @@ output "execution_role_arn" {
   description = "ARN of the shared ECS task execution role (ECR pull + log write), reused by every ecs-service instance."
   value       = aws_iam_role.execution.arn
 }
+
+output "service_connect_namespace_arn" {
+  description = "ARN of the Service Connect HTTP namespace (PRD platform/0012). Read by app-edge via terraform_remote_state; every ecs-service instance's service_connect_configuration joins this namespace."
+  value       = aws_service_discovery_http_namespace.this.arn
+}
+
+output "mesh_sg_id" {
+  description = "ID of the shared internal mesh security group (PRD platform/0012), which trusts only its own members on the app port. Read by app-edge via terraform_remote_state; appended to every ecs-service instance's task security groups alongside its own ALB-scoped SG."
+  value       = aws_security_group.mesh.id
+}

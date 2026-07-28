@@ -61,41 +61,61 @@ resource "aws_iam_role" "task" {
 
 # Customer-managed policy (never an inline aws_iam_role_policy — the deployer
 # lacks iam:PutRolePolicy) scoping the task role to exactly its own table(s)
-# and their indexes, never account-wide DynamoDB access.
+# and their indexes, never account-wide DynamoDB access, plus (optionally)
+# sqs:SendMessage on named queues for a service that produces onto the async
+# branch (PRD platform/0008 — e.g. the user service publishing onto the
+# notifications queue). Both grants stay within the soa-boundary's existing
+# ceiling (DynamoDbDataAccess / SqsDataAccess) — this document only ever
+# narrows that ceiling to the resources this specific service owns.
 data "aws_iam_policy_document" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
-  statement {
-    sid    = "DynamoDbTableAccess"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:Query",
-      "dynamodb:Scan",
-      "dynamodb:BatchGetItem",
-      "dynamodb:BatchWriteItem",
-      "dynamodb:DescribeTable",
-    ]
-    resources = concat(
-      var.table_arns,
-      [for arn in var.table_arns : "${arn}/index/*"],
-    )
+  dynamic "statement" {
+    for_each = length(var.table_arns) > 0 ? [1] : []
+
+    content {
+      sid    = "DynamoDbTableAccess"
+      effect = "Allow"
+      actions = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable",
+      ]
+      resources = concat(
+        var.table_arns,
+        [for arn in var.table_arns : "${arn}/index/*"],
+      )
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.sqs_send_arns) > 0 ? [1] : []
+
+    content {
+      sid       = "SqsSendMessage"
+      effect    = "Allow"
+      actions   = ["sqs:SendMessage"]
+      resources = var.sqs_send_arns
+    }
   }
 }
 
 resource "aws_iam_policy" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
   name        = "${var.name_prefix}-${var.name}-task"
-  description = "DynamoDB access scoped to the ${var.name} service's own table(s) only."
+  description = "DynamoDB access scoped to the ${var.name} service's own table(s), and (if set) sqs:SendMessage scoped to its producer queue(s)."
   policy      = data.aws_iam_policy_document.task[0].json
 }
 
 resource "aws_iam_role_policy_attachment" "task" {
-  count = length(var.table_arns) > 0 ? 1 : 0
+  count = length(var.table_arns) > 0 || length(var.sqs_send_arns) > 0 ? 1 : 0
 
   role       = aws_iam_role.task.name
   policy_arn = aws_iam_policy.task[0].arn
@@ -191,6 +211,7 @@ resource "aws_ecs_task_definition" "this" {
 
       portMappings = [
         {
+          name          = var.name # named port required by Service Connect (PRD platform/0012); referenced as port_name below
           containerPort = var.port
           protocol      = "tcp"
         }
@@ -223,11 +244,24 @@ resource "aws_ecs_service" "this" {
   cluster         = var.cluster_id
   task_definition = aws_ecs_task_definition.this.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # Fargate Spot toggle (PRD platform/0010): capacity_provider_strategy
+  # replaces launch_type entirely (the two are mutually exclusive on this
+  # resource). requires_compatibilities = ["FARGATE"] on the task definition
+  # above is unchanged — Spot is still Fargate, just interruptible capacity.
+  capacity_provider_strategy {
+    capacity_provider = var.use_fargate_spot ? "FARGATE_SPOT" : "FARGATE"
+    weight            = 1
+  }
 
   network_configuration {
-    subnets          = var.public_subnet_ids
-    security_groups  = [aws_security_group.task.id]
+    subnets = var.public_subnet_ids
+    # Each task keeps its own ALB-scoped task SG (public ingress path,
+    # unchanged) and, when mesh_sg_id is set, ALSO carries the shared mesh SG
+    # (PRD platform/0012) so it can reach and be reached by other services'
+    # tasks over Service Connect. compact() drops the empty-string default so
+    # this still plans before app-base's mesh SG output exists.
+    security_groups  = compact([aws_security_group.task.id, var.mesh_sg_id])
     assign_public_ip = true # no NAT gateway in this design; tasks need a public IP to pull from ECR
   }
 
@@ -235,6 +269,32 @@ resource "aws_ecs_service" "this" {
     target_group_arn = aws_lb_target_group.this.arn
     container_name   = var.name
     container_port   = var.port
+  }
+
+  # Service Connect (PRD platform/0012): joins the shared "soa" HTTP
+  # namespace and advertises this service's app port under its own logical
+  # name, so peers call it at http://<name>:<port> instead of a churning
+  # task IP or the public ALB. Enabled uniformly for every service (no
+  # toggle) once app-base's namespace is available; the dynamic block with an
+  # empty-string default lets this module still validate/plan before that
+  # namespace exists.
+  dynamic "service_connect_configuration" {
+    for_each = var.service_connect_namespace_arn != "" ? [1] : []
+
+    content {
+      enabled   = true
+      namespace = var.service_connect_namespace_arn
+
+      service {
+        port_name      = var.name
+        discovery_name = var.name
+
+        client_alias {
+          port     = var.port
+          dns_name = var.name
+        }
+      }
+    }
   }
 
   depends_on = [aws_lb_listener_rule.this]
@@ -279,5 +339,40 @@ resource "aws_appautoscaling_policy" "cpu" {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"
     }
     target_value = 70
+  }
+}
+
+# --- CPU-high alarm (optional, PRD platform/0011) ----------------------------
+#
+# A natural companion to the autoscaling policy above: that policy already
+# targets 70% average CPU and should absorb ordinary load on its own, so this
+# alarm is set higher (85%) and sustained (3 consecutive 1-minute periods) —
+# it's meant to catch scaling that isn't keeping up (e.g. pinned at max
+# capacity), not to fire on every routine scale-out. Empty alerts_topic_arn
+# (the default) creates no alarm, so a service without it still works.
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  count = var.alerts_topic_arn != "" ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-${var.name}-cpu-high"
+  alarm_description   = "The ${var.name} service's average CPU utilization has been at or above 85% for 3 consecutive minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 3
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 85
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ClusterName = local.cluster_name
+    ServiceName = aws_ecs_service.this.name
+  }
+
+  alarm_actions = [var.alerts_topic_arn]
+  ok_actions    = [var.alerts_topic_arn]
+
+  tags = {
+    Name = "${var.name_prefix}-${var.name}-cpu-high"
   }
 }

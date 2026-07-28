@@ -258,49 +258,55 @@ data "aws_iam_policy_document" "deployer_permissions" {
     ]
   }
 
-  # ECS: cluster, services, task definitions for the Fargate workloads.
+  # Consolidated global-scope service management: was 12 separate Allow-on-"*"
+  # no-condition statements (ecs/ecr/ec2/elb/sqs/sns/logs/autoscaling/
+  # cloudwatch/cognito/lambda), merged to fit the 6144-char managed-policy
+  # limit (PRD platform/0008). Effective permissions are byte-for-byte
+  # identical to the sum of those statements — same actions on the same
+  # Resource "*". Keep a short inline comment marking each service group.
   statement {
-    sid       = "EcsManagement"
+    sid       = "GlobalServiceManagement"
     effect    = "Allow"
-    actions   = ["ecs:*"]
     resources = ["*"]
-  }
-
-  # ECR: image repositories for the containerized services.
-  statement {
-    sid       = "EcrManagement"
-    effect    = "Allow"
-    actions   = ["ecr:*"]
-    resources = ["*"]
-  }
-
-  # EC2 read-only discovery (VPCs, subnets, route tables, security groups,
-  # AMIs, availability zones, etc.). Describe* actions do not support
-  # resource-level restriction in IAM, so Resource "*" is required here —
-  # this is a read-only statement, not account-wide write access.
-  # ec2:GetSecurityGroupsForVpc is a newer read action the ELBv2
-  # CreateLoadBalancer flow requires; it is NOT matched by ec2:Describe*.
-  statement {
-    sid    = "Ec2ReadOnly"
-    effect = "Allow"
     actions = [
+      # ECS: cluster, services, task definitions for the Fargate workloads.
+      "ecs:*",
+      # ECR: image repositories for the containerized services.
+      "ecr:*",
+      # Elastic Load Balancing: the single shared ALB in front of ECS services.
+      "elasticloadbalancing:*",
+      # SQS: the async work queue between ECS and Lambda.
+      "sqs:*",
+      # SNS: notification fan-out from the Lambda worker.
+      "sns:*",
+      # CloudWatch Logs: ECS/Lambda log groups and streams.
+      "logs:*",
+      # Application Auto Scaling: ECS service scaling policies.
+      "application-autoscaling:*",
+      # CloudWatch: alarms/dashboards for observability.
+      "cloudwatch:*",
+      # AWS Budgets: the monthly cost budget (PRD platform/0011). Global
+      # service (no region in the ARN); CreateBudget requires budgets:ModifyBudget.
+      "budgets:*",
+      # Cognito: the user pool used for application auth.
+      "cognito-idp:*",
+      # Lambda: the async notification worker (PRD platform/0008).
+      "lambda:*",
+      # Cloud Map / Service Discovery: the ECS Service Connect namespace
+      # (PRD platform/0012). CreateHttpNamespace + namespace refresh/tag reads.
+      "servicediscovery:*",
+      # EC2 read-only discovery (VPCs, subnets, route tables, security
+      # groups, AMIs, availability zones, etc.). Describe* actions do not
+      # support resource-level restriction in IAM. ec2:GetSecurityGroupsForVpc
+      # is a newer read action the ELBv2 CreateLoadBalancer flow requires; it
+      # is NOT matched by ec2:Describe*.
       "ec2:Describe*",
       "ec2:GetSecurityGroupsForVpc",
-    ]
-    resources = ["*"]
-  }
-
-  # EC2 network management: create/modify/delete the VPC, subnets, route
-  # tables, internet gateway, and security groups this project needs.
-  # Most of these EC2 actions do not support resource-level ARN scoping in
-  # IAM (the resource doesn't exist yet at authorization time, or AWS simply
-  # doesn't define fine-grained resource types for it), so Resource "*" is
-  # the practical option — the statement is still scoped to specific,
-  # named actions rather than "ec2:*".
-  statement {
-    sid    = "Ec2NetworkManagement"
-    effect = "Allow"
-    actions = [
+      # EC2 network management: create/modify/delete the VPC, subnets, route
+      # tables, internet gateway, and security groups this project needs.
+      # Most of these EC2 actions do not support resource-level ARN scoping
+      # in IAM (the resource doesn't exist yet at authorization time, or AWS
+      # simply doesn't define fine-grained resource types for it).
       "ec2:CreateVpc",
       "ec2:DeleteVpc",
       "ec2:ModifyVpcAttribute",
@@ -326,15 +332,6 @@ data "aws_iam_policy_document" "deployer_permissions" {
       "ec2:CreateTags",
       "ec2:DeleteTags",
     ]
-    resources = ["*"]
-  }
-
-  # Elastic Load Balancing: the single shared ALB in front of ECS services.
-  statement {
-    sid       = "ElbManagement"
-    effect    = "Allow"
-    actions   = ["elasticloadbalancing:*"]
-    resources = ["*"]
   }
 
   # S3 frontend bucket: scoped BUCKET-level management for the SPA static
@@ -432,54 +429,6 @@ data "aws_iam_policy_document" "deployer_permissions" {
       "dynamodb:UpdateContinuousBackups",
     ]
     resources = ["arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.name_prefix}-*"]
-  }
-
-  # SQS: the async work queue between ECS and Lambda.
-  statement {
-    sid       = "SqsManagement"
-    effect    = "Allow"
-    actions   = ["sqs:*"]
-    resources = ["*"]
-  }
-
-  # SNS: notification fan-out from the Lambda worker.
-  statement {
-    sid       = "SnsManagement"
-    effect    = "Allow"
-    actions   = ["sns:*"]
-    resources = ["*"]
-  }
-
-  # CloudWatch Logs: ECS/Lambda log groups and streams.
-  statement {
-    sid       = "LogsManagement"
-    effect    = "Allow"
-    actions   = ["logs:*"]
-    resources = ["*"]
-  }
-
-  # Application Auto Scaling: ECS service scaling policies.
-  statement {
-    sid       = "AutoScalingManagement"
-    effect    = "Allow"
-    actions   = ["application-autoscaling:*"]
-    resources = ["*"]
-  }
-
-  # CloudWatch: alarms/dashboards for observability and the cost budget.
-  statement {
-    sid       = "CloudWatchManagement"
-    effect    = "Allow"
-    actions   = ["cloudwatch:*"]
-    resources = ["*"]
-  }
-
-  # Cognito: the user pool used for application auth.
-  statement {
-    sid       = "CognitoManagement"
-    effect    = "Allow"
-    actions   = ["cognito-idp:*"]
-    resources = ["*"]
   }
 
   # IAM: the GitHub OIDC provider itself (this single resource, created by
