@@ -65,6 +65,15 @@ module "frontend" {
   account_id  = data.aws_caller_identity.current.account_id
 }
 
+# Application identity provider (PRD platform/0009). Permanent and free:
+# user accounts must survive every app-edge teardown, and the pool costs
+# nothing below 50k MAU.
+module "cognito" {
+  source = "../modules/cognito"
+
+  name_prefix = var.name_prefix
+}
+
 # --- Service tables ----------------------------------------------------------
 #
 # Each service adds a `data` module block (its own DynamoDB table) below —

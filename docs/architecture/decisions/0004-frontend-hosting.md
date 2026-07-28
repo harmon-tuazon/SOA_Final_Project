@@ -5,6 +5,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-15
 
+> **Narrowed by [ADR 0005](0005-cognito-auth-over-http.md) (2026-07-24):** the "Cognito requires HTTPS redirect URIs" constraint applies only to the hosted UI; SPA-direct Cognito auth over the API flow is adopted without waiting for HTTPS. The hosting model and HTTPS deferral here still stand.
+
 ## Context
 
 [PRD frontend/0001](../../action_plan/frontend/0001-spa-scaffold-and-hosting.md) adds a demo frontend: Part 4 of the project asks the team to "showcase the working application," which is beyond the graded rubric and must stay lean and effectively free, consistent with this project's cost posture ([ADR 0001](0001-platform-and-compute-architecture.md)).

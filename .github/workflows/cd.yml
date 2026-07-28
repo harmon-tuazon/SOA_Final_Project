@@ -158,12 +158,23 @@ jobs:
       # frontend-only redeploy never clobbers the live API URL. The ALB
       # always exists after this apply (even with zero services behind it),
       # so this step is safe unconditionally.
+      # Also publishes the Cognito user pool id and public app client id
+      # (PRD platform/0009 §5.1(d)). Both are non-secret by design: a pool
+      # id and a PUBLIC app client id (no client secret) are meant to be
+      # embedded in browser code, so they ride the same runtime-config seam
+      # as the API URL rather than a GitHub secret. No region key is needed
+      # -- amazon-cognito-identity-js derives it from the pool id's prefix.
+      # Built with printf (not a heredoc) so there's no delimiter line for
+      # the YAML block scalar's indentation to interfere with.
       - name: Refresh frontend config.json with current API URL
         run: |
           set -euo pipefail
           ALB=$(terraform -chdir=terraform/app-edge output -raw alb_dns_name)
           BUCKET=$(terraform -chdir=terraform/app-base output -raw frontend_bucket_name)
-          echo "{\"apiBaseUrl\":\"http://$ALB\"}" > config.json
+          POOL=$(terraform -chdir=terraform/app-base output -raw cognito_user_pool_id)
+          CLIENT=$(terraform -chdir=terraform/app-base output -raw cognito_client_id)
+          printf '{"apiBaseUrl":"http://%s","cognitoUserPoolId":"%s","cognitoClientId":"%s"}' \
+            "$ALB" "$POOL" "$CLIENT" > config.json
           aws s3 cp config.json "s3://$BUCKET/config.json" \
             --content-type application/json \
             --cache-control no-cache

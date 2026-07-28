@@ -46,3 +46,13 @@ output "frontend_website_endpoint" {
   description = "HTTP website endpoint the SPA is served from (S3 static website hosting)."
   value       = module.frontend.website_endpoint
 }
+
+output "cognito_user_pool_id" {
+  description = "ID of the application Cognito user pool. Non-secret — published to the SPA in config.json by cd.yml, and read by app-edge via terraform_remote_state for the user service's env."
+  value       = module.cognito.user_pool_id
+}
+
+output "cognito_client_id" {
+  description = "ID of the public SPA app client (no secret). Non-secret — published to the SPA in config.json by cd.yml."
+  value       = module.cognito.client_id
+}
