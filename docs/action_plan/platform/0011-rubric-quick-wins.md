@@ -4,7 +4,7 @@
 
 ## 1. Status & metadata
 
-- **Status:** In Progress
+- **Status:** Done
 - **Date:** 2026-07-28
 - **Author:** Harmon Tuazon
 - **Approved:** 2026-07-28 (user — directed execution of the audited quick-win list)
@@ -90,4 +90,16 @@ No destructive/manual command — the monitoring deploys via CD (additive, free)
 
 ## Outcome
 
-_Filled after execution._
+Executed as planned; shipped in PR #29, with a follow-up deployer-IAM grant (below).
+
+**Delivered & verified:**
+- **CI runs service tests** — `ci.yml` now runs each service's `npm test`; **232 tests** (order 64, product 73, user 95) gate PRs. Verified green on #29.
+- **Root `README.md`** — project entry point with an embedded mermaid system-architecture diagram; plus two sequence diagrams (sync CRUD, async sign-up) in `docs/architecture/overview.md`.
+- **Monitoring** — deployed and confirmed live: `soa-alerts` SNS topic (2 email subs, pending confirmation), the `soa-monthly-cost` **$30** budget, and **5 CloudWatch alarms** (`soa-notification-worker-errors`, `soa-alb-5xx`, `soa-order/product/user-cpu-high`). All free-tier.
+- Reviewed by infra-reviewer (additive, free, base/edge-correct, no interface breakage).
+
+**Deviation — deployer lacked AWS Budgets permission:** the merge CD's `app-base` apply failed with `AccessDeniedException: budgets:ModifyBudget` — `soa-deployer` had never needed AWS Budgets (a service not previously used) and its policy didn't grant it. Added `budgets:*` to the consolidated `GlobalServiceManagement` statement in `terraform/iam.tf` (human-applied to the root, since the deployer can't modify its own IAM; policy still fits under the 6144-char limit), then re-ran the failed CD → the budget and all edge alarms created cleanly. This is the same "new-resource-type ⇒ human deployer grant" pattern as the earlier `lambda:*` grant.
+
+**Note:** the SPA/service work landed around the same time (`feat/messaging-edge-wiring` merged, closing the async end-to-end gap) — unrelated to this batch but part of the same session's progress.
+
+**Not closed by this batch (separate work):** service discovery (ECS Service Connect / Cloud Map), multi-stage Dockerfiles, cross-service integration/e2e tests.
